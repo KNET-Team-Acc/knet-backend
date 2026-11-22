@@ -1,0 +1,28 @@
+# PostgreSQL local para KNET. Uso: docker compose up -d
+# Lee POSTGRES_* de .env (Compose carga ese archivo solo).
+# Nombre fijo del proyecto: el volumen se llama igual aunque se cambie el nombre de la carpeta.
+name: knet-backend
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: knet-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-knet}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knet}
+      POSTGRES_DB: ${POSTGRES_DB:-knet}
+      TZ: America/Bogota
+    ports:
+      # Host 5433 → contenedor 5432 (evita choques con un PostgreSQL local en 5432)
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - knet-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knet} -d ${POSTGRES_DB:-knet}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  knet-pgdata:
