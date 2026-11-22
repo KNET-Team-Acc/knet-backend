@@ -6,8 +6,11 @@ import { toConsent } from "../../lib/serialize.js";
 
 const router = Router();
 
+// «supresion» solo la registra el servidor al ejecutar DELETE /api/me
+const CLIENT_TYPES = CONSENT_TYPES.filter((t) => t !== "supresion");
+
 const postSchema = z.object({
-  type: z.enum(CONSENT_TYPES),
+  type: z.enum(CLIENT_TYPES),
   documents: z.array(z.object({
     id: z.string().min(1).max(60),
     version: z.string().max(20).optional(),

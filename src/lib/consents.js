@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CONSENT_TYPES = ["aceptacion", "autorizacion_linkedin", "vinculacion", "revocacion", "cambio_permiso", "almacenamiento"];
+export const CONSENT_TYPES = ["aceptacion", "autorizacion_linkedin", "vinculacion", "revocacion", "cambio_permiso", "almacenamiento", "supresion"];
 
 /** JSON con claves ordenadas: el hash no depende del orden en que jsonb devuelva las claves. */
 export function stableStringify(v) {
@@ -35,18 +35,19 @@ export async function appendConsent(db, userId, type, payload = {}, client = {})
   const clean = JSON.parse(JSON.stringify(payload)); // quita undefined, igual que jsonb
   const hash = hashOf({ userId, type, payload: clean, client, createdAt, prevHash });
   const { rows } = await db.query(
-    `INSERT INTO consents (user_id, event_type, payload, client, prev_hash, hash, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+    `INSERT INTO consents (user_id, subject_id, event_type, payload, client, prev_hash, hash, created_at)
+     VALUES ($1, $1, $2, $3, $4, $5, $6, $7) RETURNING *`,
     [userId, type, clean, client, prevHash, hash, createdAt],
   );
   return rows[0];
 }
 
-/** Recalcula la cadena completa. Devuelve { valid, brokenAt }. */
+/** Recalcula la cadena completa de un titular. Usa subject_id, que se conserva aunque el usuario
+ *  se haya borrado (user_id = NULL). Devuelve { valid, brokenAt }. */
 export function verifyChain(rows) {
   let prev = "inicio";
   for (const r of rows) {
-    const expected = hashOf({ userId: r.user_id, type: r.event_type, payload: r.payload, client: r.client,
+    const expected = hashOf({ userId: r.subject_id, type: r.event_type, payload: r.payload, client: r.client,
       createdAt: new Date(r.created_at).toISOString(), prevHash: r.prev_hash });
     if (r.prev_hash !== prev || r.hash !== expected) return { valid: false, brokenAt: r.id };
     prev = r.hash;

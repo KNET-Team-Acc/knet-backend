@@ -35,11 +35,14 @@ if (!health) process.exit(1);
 // Busca el id del usuario demo de energía
 const demo = await check("perfil demo por defecto", "GET", "/api/me");
 console.log(`    usuario por defecto: ${demo.user.email}`);
-const { rows } = await import("pg").then(async ({ default: pg }) => {
+// Consulta directa a PostgreSQL (para lo que la API no expone)
+async function sql(text, params) {
+  const { default: pg } = await import("pg");
   const c = new pg.Client({ connectionString: process.env.DATABASE_URL });
   await c.connect();
-  try { return await c.query("SELECT id FROM users WHERE email = 'demo.energia@knet.local'"); } finally { await c.end(); }
-});
+  try { return await c.query(text, params); } finally { await c.end(); }
+}
+const { rows } = await sql("SELECT id FROM users WHERE email = 'demo.energia@knet.local'");
 userId = rows[0].id;
 console.log(`    usando demo.energia@knet.local (${userId})\n`);
 
@@ -99,6 +102,36 @@ await check("generar dossier", "POST", "/api/me/dossiers/bog", { ideas: ["Los ge
 const dos = await check("leer dossier", "GET", "/api/me/dossiers/bog");
 console.log(`    sesiones: ${dos.dossier.content.summary.sessionsAttended.length} · contactos: ${dos.dossier.content.summary.contacts.length} · XP: ${dos.dossier.content.summary.xp}`);
 await check("dossier sin inscripción", "POST", "/api/me/dossiers/and", {}, [403]);
+
+// Supresión (DELETE /api/me) con un usuario desechable: no hay endpoint para crear usuarios.
+// Cada corrida deja sus consentimientos desvinculados (user_id NULL): son inmutables a propósito.
+await check("borrar cuenta demo (prohibido)", "DELETE", "/api/me", undefined, [403]);
+const demoId = userId;
+userId = null;
+await check("borrar sin X-User-Id", "DELETE", "/api/me", undefined, [400]);
+const { rows: [tmp] } = await sql(
+  `INSERT INTO users (email, name, industry) VALUES ($1, 'Smoke Borrado', 'energia') RETURNING id`,
+  [`smoke.borrado.${Date.now()}@knet.local`]);
+userId = tmp.id;
+await check("consentimiento del usuario a borrar", "POST", "/api/me/consents", { type: "aceptacion", documents: [{ id: "privacidad", version: "1.2" }] }, [201]);
+await check("inscripción del usuario a borrar", "POST", "/api/me/registrations/bog", undefined, [200, 201]);
+await check("cliente no puede registrar «supresion»", "POST", "/api/me/consents", { type: "supresion" }, [400]);
+const del = await check("borrar mi cuenta", "DELETE", "/api/me");
+console.log(`    borrado: ${JSON.stringify(del?.deleted)} · consentimientos conservados: ${del?.consentsRetained}`);
+if (del?.deleted?.registrations !== 1) { failed++; console.log("    ✗ debería haber borrado 1 inscripción"); }
+await check("perfil borrado", "GET", "/api/me", undefined, [404]);
+const { rows: kept } = await sql("SELECT * FROM consents WHERE subject_id = $1 ORDER BY id", [tmp.id]);
+const { verifyChain } = await import("../src/lib/consents.js");
+const keptChain = verifyChain(kept);
+console.log(`    ${kept.length} consentimientos conservados · user_id NULL: ${kept.every((r) => r.user_id === null)} · último: ${kept.at(-1)?.event_type} · cadena válida: ${keptChain.valid}`);
+if (kept.length !== 2 || !kept.every((r) => r.user_id === null) || kept.at(-1)?.event_type !== "supresion" || !keptChain.valid) {
+  failed++; console.log("    ✗ el registro de consentimientos debería conservarse desvinculado, con la cadena válida");
+}
+let blocked = false;
+try { await sql("UPDATE consents SET payload = '{}'::jsonb WHERE id = $1", [kept[0].id]); } catch { blocked = true; }
+console.log(`    modificar un consentimiento conservado: ${blocked ? "bloqueado" : "PERMITIDO"}`);
+if (!blocked) failed++;
+userId = demoId;
 
 console.log(failed ? `\n${failed} prueba(s) fallaron` : "\nTodas las pruebas pasaron");
 process.exit(failed ? 1 : 0);

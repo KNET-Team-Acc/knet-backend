@@ -57,8 +57,9 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | GET | `/api/contacts` | Personas con las que se puede conectar (`?industry=`) |
 | GET | `/api/me` | Perfil, XP, nivel, permisos, estadísticas e inscripciones |
 | PATCH | `/api/me` | Edita `name`, `role`, `company`, `industry`, `seniority`, `location`, `interests`, `avatar` y `scopes` |
+| DELETE | `/api/me` | Suprime el perfil y el progreso. Exige `X-User-Id` explícito (400 sin él); las cuentas demo responden 403 `demo_account`. Los consentimientos se conservan desvinculados y se agrega un evento `supresion`. Devuelve `{ deleted: { profile, registrations, … }, consentsRetained }` |
 | GET | `/api/me/consents` | Registro de consentimientos, con la verificación de la cadena de hashes (`chain.valid`) |
-| POST | `/api/me/consents` | `{ type, documents?, details? }`: agrega un registro a la cadena |
+| POST | `/api/me/consents` | `{ type, documents?, details? }`: agrega un registro a la cadena (`supresion` solo lo registra el servidor) |
 | GET | `/api/me/registrations` | Eventos en los que estoy inscrito |
 | POST / DELETE | `/api/me/registrations/:eventId` | Inscribirse o cancelar. Los eventos exclusivos exigen el nivel mínimo |
 | GET | `/api/me/checkins` | Mis check-ins (`?eventId=`) |
@@ -81,7 +82,7 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 
 ## Modelo de datos
 
-`db/migrations/001_init.sql`:
+`db/migrations/001_init.sql` y `002_user_erasure.sql`:
 
 - **Perfil:** `users`, `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción).
 - **Catálogo:** `industries`, `events`, `event_days`, `speakers` y `sessions` (`code` = `evento:día:slot`, igual que en el frontend).
@@ -95,13 +96,15 @@ Notas:
 - La agenda del **día 1 de `bog`** tiene una variante por industria, como en el frontend (`IND[*].agenda`).
   Las demás sesiones son genéricas: usan las mismas plantillas que `sessionsFor()`, pero sin personalizarlas por perfil, así que los títulos pueden no coincidir con los que muestra el frontend hoy. Los códigos sí coinciden.
 - **Consentimientos:** el frontend envía cada evento a `POST /api/me/consents` (`details` lleva el registro local completo, con su `idLocal` y `hashLocal`) y muestra el registro con `GET /api/me/consents`. Si la API no responde, el evento queda pendiente en el navegador y se reenvía en orden al reconectar. El hash del servidor es una cadena propia, independiente de la del navegador.
+- **Supresión y retención:** `DELETE /api/me` borra el usuario; las demás tablas se borran por `ON DELETE CASCADE`. `consents.user_id` usa `ON DELETE SET NULL` y el trigger de solo inserción permite únicamente ese cambio (pasar `user_id` a `NULL` sin tocar otra columna); cualquier otro `UPDATE` o `DELETE` sigue bloqueado. `consents.subject_id` guarda el UUID del titular sin llave foránea y es el que entra en el hash, así que la cadena sigue siendo verificable después del borrado. El registro queda **desvinculado, no anonimizado** (`payload` conserva el nombre del titular y `client` el navegador): es la prueba de la autorización (Ley 1581, art. 17) durante el periodo de retención.
 - El nivel se calcula igual que en el frontend: `floor(xp / 500) + 1`, con 5 niveles como máximo (`src/lib/levels.js`).
-- Para cambiar el esquema, agrega `db/migrations/002_<descripcion>.sql`. No edites una migración que ya se aplicó.
+- Para cambiar el esquema, agrega `db/migrations/003_<descripcion>.sql` (o el siguiente número). No edites una migración que ya se aplicó.
 
 ## Pendiente
 
 - Login real (LinkedIn OAuth o JWT) en lugar de `X-User-Id`.
 - Pasar a la base de datos los DMs, el chat del Concierge, las notificaciones y las recompensas del avatar.
 - Endpoint de administración para que el Responsable consulte y exporte el registro de consentimientos de todos los usuarios (hoy `GET /api/me/consents` solo devuelve el del usuario actual).
-- Borrar en el servidor el perfil y el progreso cuando el titular pulsa «Revocar y borrar mis datos» (hoy solo se borran del navegador; el registro de consentimientos se conserva).
+- Purgar los consentimientos desvinculados cuando vence el periodo de retención (hoy el trigger impide borrarlos; haría falta un proceso controlado).
+- Cuentas demo: `DELETE /api/me` las rechaza porque son compartidas, así que los datos que alguien escriba en ellas quedan en el servidor hasta que haya login real.
 - Guardar en el servidor la agenda personalizada por perfil (hoy las sesiones son genéricas salvo el día 1 de `bog`).

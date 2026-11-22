@@ -108,4 +108,33 @@ router.patch("/", async (req, res) => {
   res.json({ user: toUser(result.user, result.scopes) });
 });
 
+// DELETE /api/me → suprime el perfil y el progreso del titular (derecho de supresión, Ley 1581).
+// Las tablas de progreso se borran por ON DELETE CASCADE. El registro de consentimientos se conserva
+// como prueba (ON DELETE SET NULL deja user_id = NULL; subject_id mantiene verificable la cadena) y
+// recibe un último evento «supresion» con lo que se borró. Exige X-User-Id explícito para no borrar
+// por accidente el usuario por defecto, y las cuentas demo (compartidas) no se pueden borrar.
+router.delete("/", async (req, res) => {
+  if (!req.get("x-user-id")) throw new HttpError(400, "Para borrar una cuenta envía su X-User-Id");
+  if (req.user.is_demo) throw new HttpError(403, "Las cuentas demo son compartidas y no se pueden borrar", "demo_account");
+
+  const result = await tx(async (c) => {
+    const { rows: [u] } = await c.query("SELECT id FROM users WHERE id = $1 FOR UPDATE", [req.user.id]);
+    if (!u) throw new HttpError(404, "Usuario no encontrado");
+    const { rows: [deleted] } = await c.query(
+      `SELECT (SELECT count(*) FROM user_scopes WHERE user_id = $1)::int AS scopes,
+              (SELECT count(*) FROM registrations WHERE user_id = $1)::int AS registrations,
+              (SELECT count(*) FROM checkins WHERE user_id = $1)::int AS checkins,
+              (SELECT count(*) FROM mission_progress WHERE user_id = $1)::int AS missions,
+              (SELECT count(*) FROM xp_ledger WHERE user_id = $1)::int AS "xpEntries",
+              (SELECT count(*) FROM connections WHERE user_id = $1)::int AS connections,
+              (SELECT count(*) FROM dossiers WHERE user_id = $1)::int AS dossiers`, [u.id]);
+    await appendConsent(c, u.id, "supresion", { details: { motivo: "Solicitud del titular (DELETE /api/me)", borrado: { profile: 1, ...deleted } } }, clientInfo(req));
+    await c.query("DELETE FROM users WHERE id = $1", [u.id]);
+    const { rows: [kept] } = await c.query("SELECT count(*)::int AS n FROM consents WHERE subject_id = $1", [u.id]);
+    return { deleted, consentsRetained: kept.n };
+  });
+
+  res.json({ deleted: { profile: 1, ...result.deleted }, consentsRetained: result.consentsRetained });
+});
+
 export default router;
