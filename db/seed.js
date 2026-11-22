@@ -7,7 +7,7 @@
  */
 import { tx, pool } from "../src/db.js";
 import { appendConsent } from "../src/lib/consents.js";
-import { EVENTS, EV_DAYS, EV_INFO, EV_SPEAKERS } from "./data/events.js";
+import { EVENTS, EV_DAYS, EV_INFO, EV_SPEAKERS, SUMMIT_POOL } from "./data/events.js";
 import { COMMON_M, GROUP_M } from "./data/gamification.js";
 import { IND, MATCH_INFO, OTHERS, PERSONAS } from "./data/industries.js";
 import { P_FIELDS } from "./data/privacy.js";
@@ -148,6 +148,16 @@ async function seedContacts(c) {
         [name, initials, headline, ind, affinity, reason, info.int || [], info.likes || [], info.goal || "", baseXp[name] || 0]);
       bump("contacts");
     }
+  }
+  // Asistentes del Summit que aparecen al escanear el QR de conexión (SUMMIT_POOL).
+  // Si alguno coincide con un match (industry no nula), se conservan los datos del match.
+  for (const [name, headline] of SUMMIT_POOL) {
+    const initials = name.split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
+    const { rowCount } = await c.query(
+      `INSERT INTO contacts (name, initials, headline) VALUES ($1, $2, $3)
+       ON CONFLICT (name) DO UPDATE SET headline = EXCLUDED.headline WHERE contacts.industry IS NULL`,
+      [name, initials, headline]);
+    bump("contacts", rowCount);
   }
 }
 

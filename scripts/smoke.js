@@ -80,8 +80,20 @@ await check("evento exclusivo bloqueado", "POST", "/api/me/registrations/x5", un
 await check("inscribirse en med", "POST", "/api/me/registrations/med", undefined, [200, 201]);
 
 await check("conectar por QR", "POST", "/api/me/connections", { name: "Felipe L.", source: "qr", eventId: "bog", context: "Gemelos digitales" }, [201, 409]);
-await check("solicitud pendiente", "POST", "/api/me/connections", { name: "Paula B." }, [201, 409]);
-await check("mis conexiones", "GET", "/api/me/connections");
+await check("QR con asistente de SUMMIT_POOL", "POST", "/api/me/connections", { name: "Andrea P.", source: "qr" }, [201, 409]);
+// Ciclo completo de una solicitud: pendiente → aceptada → eliminada (se deja eliminada para poder repetir el smoke)
+await check("solicitud pendiente", "POST", "/api/me/connections", { name: "Paula B." }, [201]);
+const conns = await check("mis conexiones", "GET", "/api/me/connections");
+const paula = conns.connections.find((c) => c.contact.name === "Paula B.");
+if (paula?.status !== "pending") { failed++; console.log("    ✗ Paula B. debería estar pendiente"); }
+const acc1 = await check("aceptar solicitud", "PATCH", `/api/me/connections/${paula.id}`, { status: "accepted" });
+console.log(`    aceptada · +${acc1.xpAwarded} XP (100 la primera vez, 0 si ya la había ganado antes)`);
+const acc2 = await check("aceptar otra vez (idempotente)", "PATCH", `/api/me/connections/${paula.id}`, { status: "accepted" });
+if (acc2.xpAwarded !== 0) { failed++; console.log("    ✗ aceptar dos veces no debe sumar XP"); }
+await check("estado inválido", "PATCH", `/api/me/connections/${paula.id}`, { status: "pending" }, [400]);
+await check("quitar conexión", "DELETE", `/api/me/connections/${paula.id}`, undefined, [204]);
+await check("quitar otra vez", "DELETE", `/api/me/connections/${paula.id}`, undefined, [404]);
+await check("conexión inexistente", "PATCH", "/api/me/connections/999999", { status: "accepted" }, [404]);
 
 await check("generar dossier", "POST", "/api/me/dossiers/bog", { ideas: ["Los gemelos digitales rinden más en activos críticos."], plan: ["Priorizar 2 activos críticos"] }, [200, 201]);
 const dos = await check("leer dossier", "GET", "/api/me/dossiers/bog");

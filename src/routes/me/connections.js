@@ -63,4 +63,33 @@ router.post("/", async (req, res) => {
   res.status(201).json({ connection: toConnection(result.row), ...result.xp, ...levelInfo(result.xp.xp) });
 });
 
+const idParam = z.coerce.number().int().positive();
+
+// PATCH /api/me/connections/:id { status: "accepted" } → acepta una solicitud pendiente (+100 XP una sola vez)
+router.patch("/:id", async (req, res) => {
+  const id = idParam.parse(req.params.id);
+  z.object({ status: z.literal("accepted") }).strict().parse(req.body ?? {});
+  const result = await tx(async (c) => {
+    const { rows: [cn] } = await c.query(
+      "SELECT id, contact_id, status FROM connections WHERE id = $1 AND user_id = $2 FOR UPDATE", [id, req.user.id]);
+    if (!cn) throw new HttpError(404, `No existe la conexión ${id}`);
+    // Idempotente: aceptar una conexión ya aceptada no falla ni vuelve a sumar XP
+    if (cn.status === "pending") {
+      await c.query("UPDATE connections SET status = 'accepted', accepted_at = now() WHERE id = $1", [id]);
+    }
+    const xp = await awardXp(c, req.user.id, XP_REWARDS.connection, "connection", String(cn.contact_id));
+    const { rows: [row] } = await c.query(`${SELECT} WHERE cn.id = $1`, [id]);
+    return { row, xp };
+  });
+  res.json({ connection: toConnection(result.row), ...result.xp, ...levelInfo(result.xp.xp) });
+});
+
+// DELETE /api/me/connections/:id → quita la conexión (la XP ya ganada se conserva)
+router.delete("/:id", async (req, res) => {
+  const id = idParam.parse(req.params.id);
+  const { rowCount } = await query("DELETE FROM connections WHERE id = $1 AND user_id = $2", [id, req.user.id]);
+  if (!rowCount) throw new HttpError(404, `No existe la conexión ${id}`);
+  res.status(204).end();
+});
+
 export default router;

@@ -67,6 +67,8 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | POST | `/api/me/missions/:code/complete` | Completa la misión y suma su XP |
 | GET | `/api/me/connections` | Mis conexiones (`?status=pending\|accepted`) |
 | POST | `/api/me/connections` | `{ contactId \| name, source?: "request"\|"match"\|"qr", context?, eventId? }`. Por QR queda aceptada y suma +100 XP |
+| PATCH | `/api/me/connections/:id` | `{ status: "accepted" }`: acepta una solicitud pendiente y suma +100 XP (una sola vez por contacto; repetirlo no falla) |
+| DELETE | `/api/me/connections/:id` | Quita la conexión. La XP ya ganada se conserva |
 | GET | `/api/me/dossiers` | Todos mis dossiers |
 | GET / POST | `/api/me/dossiers/:eventId` | Lee o genera el dossier del evento. `POST { ideas?, plan?, notes? }`; el resumen de sesiones, contactos y XP lo calcula el servidor |
 
@@ -84,7 +86,7 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 - **Perfil:** `users`, `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción).
 - **Catálogo:** `industries`, `events`, `event_days`, `speakers` y `sessions` (`code` = `evento:día:slot`, igual que en el frontend).
 - **Progreso:** `registrations`, `checkins`, `missions`, `mission_progress` y `xp_ledger` (cada XP sumado queda registrado y no se puede sumar dos veces; `users.xp` guarda el total).
-- **Red:** `contacts` y `connections`.
+- **Red:** `contacts` (los matches de cada industria y los asistentes de `SUMMIT_POOL` que aparecen en el escaneo QR) y `connections`.
 - **Dossier:** `dossiers` (contenido `jsonb` por usuario y evento).
 
 Notas:
@@ -99,5 +101,5 @@ Notas:
 
 - Login real (LinkedIn OAuth o JWT) en lugar de `X-User-Id`.
 - Pasar a la base de datos los DMs, el chat del Concierge, las notificaciones y las recompensas del avatar.
-- Aceptar o rechazar conexiones pendientes (`PATCH /api/me/connections/:id`).
-- Conectar `knetApp.js` a esta API.
+- Conectar los consentimientos del frontend (antes hay que actualizar el texto legal de la app).
+- Guardar en el servidor la agenda personalizada por perfil (hoy las sesiones son genéricas salvo el día 1 de `bog`).
