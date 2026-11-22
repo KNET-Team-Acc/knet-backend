@@ -94,6 +94,7 @@ Notas:
 - **Datos del seed:** `db/data/` es una copia de los archivos de `src/data/` del frontend (`events`, `gamification`, `industries`, `privacy`, `venues`). Si el frontend los cambia, cópialos de nuevo aquí y corre `npm run db:seed`.
 - La agenda del **día 1 de `bog`** tiene una variante por industria, como en el frontend (`IND[*].agenda`).
   Las demás sesiones son genéricas: usan las mismas plantillas que `sessionsFor()`, pero sin personalizarlas por perfil, así que los títulos pueden no coincidir con los que muestra el frontend hoy. Los códigos sí coinciden.
+- **Consentimientos:** el frontend envía cada evento a `POST /api/me/consents` (`details` lleva el registro local completo, con su `idLocal` y `hashLocal`) y muestra el registro con `GET /api/me/consents`. Si la API no responde, el evento queda pendiente en el navegador y se reenvía en orden al reconectar. El hash del servidor es una cadena propia, independiente de la del navegador.
 - El nivel se calcula igual que en el frontend: `floor(xp / 500) + 1`, con 5 niveles como máximo (`src/lib/levels.js`).
 - Para cambiar el esquema, agrega `db/migrations/002_<descripcion>.sql`. No edites una migración que ya se aplicó.
 
@@ -101,5 +102,6 @@ Notas:
 
 - Login real (LinkedIn OAuth o JWT) en lugar de `X-User-Id`.
 - Pasar a la base de datos los DMs, el chat del Concierge, las notificaciones y las recompensas del avatar.
-- Conectar los consentimientos del frontend (antes hay que actualizar el texto legal de la app).
+- Endpoint de administración para que el Responsable consulte y exporte el registro de consentimientos de todos los usuarios (hoy `GET /api/me/consents` solo devuelve el del usuario actual).
+- Borrar en el servidor el perfil y el progreso cuando el titular pulsa «Revocar y borrar mis datos» (hoy solo se borran del navegador; el registro de consentimientos se conserva).
 - Guardar en el servidor la agenda personalizada por perfil (hoy las sesiones son genéricas salvo el día 1 de `bog`).
