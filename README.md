@@ -136,9 +136,9 @@ es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)
 ## Despliegue
 
 **Producción actual (Vercel + Neon):** API en https://knet-backend.vercel.app (proyecto `knet-backend`), PostgreSQL en Neon (`knet-db`, región `iad1`, conectado por la integración de Vercel, que define `DATABASE_URL` y `DATABASE_URL_UNPOOLED`). `api/index.js` exporta la app de Express como Vercel Function y `vercel.json` reescribe todas las rutas hacia ella; `.vercelignore` evita subir `.env*`.
-- Desplegar: `npx vercel deploy --prod` (el repositorio aún no está conectado a la app de GitHub de Vercel; al conectarlo, cada push a `main` desplegará solo).
-- Migraciones: `vercel env pull` y `npm run db:migrate` con `DATABASE_URL_UNPOOLED` (no se aplican al desplegar la función).
-- Variables en Vercel: `JWT_SECRET` (sensible), `TRUST_PROXY=1`, `LEGAL_VERSION`, `CORS_ORIGIN=https://knet-frontend.vercel.app`. Faltan `AI_API_KEY` y las de LinkedIn.
+- Desplegar: el repositorio está conectado a Vercel; cada push a `main` despliega producción y cada PR tiene su preview. A mano: `npx vercel deploy --prod`.
+- Migraciones: Vercel no las aplica al desplegar la función. Las corre `.github/workflows/db-migrate.yml` en cada push a `main` que toque `db/**` (o `src/lib/agenda.js`): `npm run db:migrate` y luego `npm run db:seed` (solo upserts) contra Neon, con el secreto del repo `NEON_DATABASE_URL_UNPOOLED` (= `DATABASE_URL_UNPOOLED` de Vercel). También se puede lanzar a mano desde Actions (*Run workflow*). Vercel despliega en paralelo, así que las migraciones deben ser aditivas. A mano: `vercel env pull` y `npm run db:migrate` con `DATABASE_URL_UNPOOLED`.
+- Variables en Vercel: `JWT_SECRET` (sensible), `TRUST_PROXY=1`, `LEGAL_VERSION`, `CORS_ORIGIN=https://knet-frontend.vercel.app`, `AI_API_KEY` (sensible), `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` (sensible), `LINKEDIN_REDIRECT_URI`, `QR_SECRET` y `TOTEM_SECRET` (sensibles) y los valores de `.env.example`.
 - Límites en Vercel: `/api/me/stream` (SSE) se corta a los 300 s y el cliente reconecta con `Last-Event-ID`; el bus de eventos y el rate limit viven en memoria por instancia.
 
 **Contenedor (cualquier otra plataforma):**
