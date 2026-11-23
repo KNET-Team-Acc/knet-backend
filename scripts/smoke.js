@@ -54,6 +54,17 @@ await check("solo reales", "GET", "/api/events?kind=real");
 await check("detalle bog", "GET", "/api/events/bog");
 const ses = await check("sesiones bog día 0", "GET", "/api/events/bog/sessions?day=0");
 console.log(`    1ª sesión: ${ses.sessions[0].time} · ${ses.sessions[0].title}`);
+// Agenda personalizada por industria (paridad completa con el frontend: npm run parity)
+const agMine = await check("agenda med día 0 (industria del perfil)", "GET", "/api/events/med/sessions?day=0");
+const agTech = await check("agenda med día 0 con industry=tech", "GET", "/api/events/med/sessions?day=0&industry=tech");
+const titles = (r) => r?.sessions?.map((s) => s.title).join("|");
+if (agMine?.industry !== "energia" || agTech?.industry !== "tech") { failed++; console.log("    ✗ industry debería ser energia (perfil) y tech (explícita)"); }
+if (titles(agMine) === titles(agTech)) { failed++; console.log("    ✗ la agenda de energía y la de tecnología deberían ser distintas"); }
+if (!agMine?.sessions?.length || !agMine.sessions.every((s) => s.why && /^med:0:\d$/.test(s.code))) {
+  failed++; console.log("    ✗ cada sesión debe traer why y un código med:0:i");
+}
+console.log(`    energía: ${agMine?.sessions?.[0]?.title} · tech: ${agTech?.sessions?.[0]?.title}`);
+await check("agenda con industria inexistente", "GET", "/api/events/med/sessions?day=0&industry=nope", undefined, [400]);
 await check("evento inexistente", "GET", "/api/events/nope", undefined, [404]);
 await check("día fuera de rango", "GET", "/api/events/med/sessions?day=5", undefined, [404]);
 
@@ -83,6 +94,10 @@ await check("misión de otra industria", "POST", "/api/me/missions/tech-m0/compl
 
 await check("evento exclusivo bloqueado", "POST", "/api/me/registrations/x5", undefined, [403]);
 await check("inscribirse en med", "POST", "/api/me/registrations/med", undefined, [200, 201]);
+await check("check-in en sesión generada med:0:2", "POST", "/api/me/checkins", { sessionCode: "med:0:2" }, [201, 409]);
+const medCk = await check("mis check-ins en med", "GET", "/api/me/checkins?eventId=med");
+const ck = medCk?.checkins?.find((c) => c.sessionCode === "med:0:2");
+if (ck?.session?.title !== agMine?.sessions?.[2]?.title) { failed++; console.log("    ✗ el check-in debería mostrar la sesión de la agenda de energía"); }
 
 await check("conectar por QR", "POST", "/api/me/connections", { name: "Felipe L.", source: "qr", eventId: "bog", context: "Gemelos digitales" }, [201, 409]);
 await check("QR con asistente de SUMMIT_POOL", "POST", "/api/me/connections", { name: "Andrea P.", source: "qr" }, [201, 409]);
@@ -274,6 +289,12 @@ const acc = await check("consentimiento del usuario a borrar", "POST", "/api/me/
   { type: "aceptacion", documents: [{ id: "terminos", version: "1.2" }, { id: "privacidad", version: "1.2" }] }, [201]);
 if (acc?.legalVersion !== "1.2") { failed++; console.log("    ✗ la aceptación debería fijar legalVersion 1.2"); }
 await check("inscripción del usuario a borrar", "POST", "/api/me/registrations/bog", undefined, [200, 201]);
+// Cambiar la industria del perfil cambia la agenda (con el usuario desechable, para no tocar los demo)
+await check("cambiar industria a tech", "PATCH", "/api/me", { industry: "tech" });
+const agAfter = await check("agenda med día 0 tras el cambio", "GET", "/api/events/med/sessions?day=0");
+if (titles(agAfter) !== titles(agTech) || titles(agAfter) === titles(agMine)) {
+  failed++; console.log("    ✗ tras cambiar a tech la agenda debería ser la de tecnología");
+}
 await check("cliente no puede registrar «supresion»", "POST", "/api/me/consents", { type: "supresion" }, [400]);
 const del = await check("borrar mi cuenta", "DELETE", "/api/me");
 console.log(`    borrado: ${JSON.stringify(del?.deleted)} · consentimientos conservados: ${del?.consentsRetained}`);

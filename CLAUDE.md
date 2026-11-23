@@ -1,11 +1,11 @@
 # KNET backend
 
-API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedor 5432). API en **:4000**. Frontend en `../knet-frontend/knet-frontend` (CORS `http://localhost:5173`). Detalle de endpoints y esquema: `README.md`.
+API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedor 5432). API en **:4000**. Frontend en `../knet-frontend` (CORS `http://localhost:5173`). Detalle de endpoints y esquema: `README.md`.
 
 ## Carpetas
 - `db/migrations/` — SQL numerado (`001_init.sql`, `002_user_erasure.sql`, `003_auth.sql`, `004_coffees_messages.sql`, `005_qr_nfc.sql`). Nunca edites una migración aplicada: agrega la siguiente (`006_...`).
 - `db/data/` — copia de `src/data/` del frontend para el seed (si el frontend cambia, recopiar y `db:seed`).
-- `src/` — `app.js`, `config.js`, `db.js` (`query`, `tx`), `middleware/` (`user.js`: Bearer JWT; `X-User-Id`/demo solo en desarrollo), `lib/` (`ai.js`, `auth.js`, `dossier.js`, `events-bus.js`, `consents.js`, `xp.js`, `levels.js`, `serialize.js`, `http.js`, `threads.js`, `qr.js`, `checkins.js`), `routes/` (`auth.js` público; `totem.js` con `X-Totem-Key`; `ai.js`; `me/*` = rutas del usuario).
+- `src/` — `app.js`, `config.js`, `db.js` (`query`, `tx`), `middleware/` (`user.js`: Bearer JWT; `X-User-Id`/demo solo en desarrollo), `lib/` (`ai.js`, `auth.js`, `dossier.js`, `events-bus.js`, `consents.js`, `xp.js`, `levels.js`, `serialize.js`, `http.js`, `threads.js`, `qr.js`, `checkins.js`, `agenda.js`), `routes/` (`auth.js` público; `totem.js` con `X-Totem-Key`; `ai.js`; `me/*` = rutas del usuario).
 
 ## Comandos
 - `npm run dev` (con `--watch`) / `npm start` (sin watch: reiniciar tras cambios)
@@ -16,6 +16,7 @@ API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedo
 - `npm run test:ai` — `/api/ai/*` con el proveedor simulado (no gasta tokens; solo necesita la BD).
 - `npm run test:stream` — SSE de `/api/me/stream` (solo necesita la BD; `EVENTS_PG_NOTIFY=true` prueba LISTEN/NOTIFY).
 - `npm run test:linkedin` — flujo OAuth de LinkedIn con los endpoints de LinkedIn simulados (solo necesita la BD).
+- `npm run parity` — paridad de la agenda con `sessionsFor()` del frontend (`FRONTEND_DIR`, por defecto `../knet-frontend`); si la API está en marcha, compara también lo sembrado
 
 ## Reglas
 - Nivel = `floor(xp / 500) + 1`, máximo 5 (`src/lib/levels.js`), igual que el frontend.
@@ -25,6 +26,7 @@ API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedo
 - Identidad: `resolveUser()` acepta `Authorization: Bearer`. Solo con `NODE_ENV=development` acepta `X-User-Id` y, sin nada, el demo compartido (`DEMO_USER_EMAIL`): nunca lo borres ni lo ensucies en pruebas (el smoke usa `demo.energia@knet.local`). `/api/events` y `/api/contacts` usan `resolveUser({ optional: true })` (`req.user` puede ser `null`).
 - Auth: refresh tokens solo como SHA-256 (`refresh_tokens`); reutilizar uno revocado revoca su familia (`rotateRefreshToken` confirma esa revocación antes de responder 401). Nunca registres tokens ni secretos en logs.
 - Legal: `legal_version < LEGAL_VERSION` (o NULL, salvo demo) → 409 `legal_outdated` en `/api/me/*` menos `consents` y `DELETE /api/me`. Una `aceptacion` con `terminos` y `privacidad` en la versión vigente lo actualiza. `LEGAL_VERSION` debe ser igual a `LEGAL.version` del frontend.
+- Agenda: `src/lib/agenda.js` es un port de `sessionsFor()` del frontend y el seed lo usa para sembrar una variante por industria. Si el frontend cambia sus plantillas, actualiza el port y corre `npm run parity`.
 - Comentarios y mensajes de error en español.
 - Conexiones: `contact_id` (catálogo) o `peer_user_id` (usuario real, dos filas espejo A→B y B→A). Cafés y mensajes pasan siempre por `resolveThread()` (`src/lib/threads.js`): 404 si la conexión no es del usuario, 403 `not_connected` si no está aceptada por ambos lados. XP de café: `awardXp(..., "coffee", "coffee:<id>")` a cada participante con cuenta.
 - QR/NFC: tokens `knet1.<payload>.<hmac>` solo con `signQrToken()`/`verifyQrToken()` (`src/lib/qr.js`); gasta el nonce con `consumeNonce()` dentro de la misma `tx()` que crea la conexión o el check-in. `QR_SECRET` vacío = derivado de `JWT_SECRET`; `TOTEM_SECRET` vacío fuera de desarrollo = NFC desactivado (503). Los check-ins (app y tótem) pasan por `recordCheckin()` (`src/lib/checkins.js`).

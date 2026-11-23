@@ -13,7 +13,8 @@
     "smoke": "node scripts/smoke.js",
     "test:linkedin": "node scripts/linkedin-mock.js",
     "test:ai": "node scripts/ai-mock.js",
-    "test:stream": "node scripts/stream-test.js"
+    "test:stream": "node scripts/stream-test.js",
+    "parity": "node scripts/agenda-parity.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.12.0",

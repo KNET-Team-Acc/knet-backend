@@ -6,25 +6,13 @@
  * Si cambian los datos en el frontend (knet-frontend/src/data/), copia aquí los archivos y vuelve a correr el seed.
  */
 import { tx, pool } from "../src/db.js";
+import { generateAgenda, KINDS, ROOMS, TIMES, TPL } from "../src/lib/agenda.js";
 import { appendConsent } from "../src/lib/consents.js";
 import { EVENTS, EV_DAYS, EV_INFO, EV_SPEAKERS, SUMMIT_POOL } from "./data/events.js";
 import { COMMON_M, GROUP_M } from "./data/gamification.js";
 import { IND, MATCH_INFO, OTHERS, PERSONAS } from "./data/industries.js";
 import { P_FIELDS } from "./data/privacy.js";
 import { VENUES } from "./data/venues.js";
-
-/* Plantillas de sessionsFor() en knetApp.js, sin la personalización por perfil */
-const TIMES = ["08:30", "10:15", "14:00", "16:30"];
-const KINDS = ["Keynote", "Panel", "Taller", "Charla"];
-const ROOMS = ["Auditorio principal", "Sala Orbit", "Lab 3 · Zona de talleres", "Sala Quantum", "Sala Nova", "Terraza del pabellón"];
-const TPL = [
-  (t) => `${t}: del piloto a producción`,
-  (t) => `Casos reales de ${t} en Latinoamérica`,
-  (t) => `Taller práctico: ${t} en 90 minutos`,
-  (t) => `Panel: lo que nadie cuenta sobre ${t}`,
-  (t) => `Demo en vivo: ${t} aplicado al negocio`,
-  (t) => `${t} con métricas de impacto`,
-];
 
 const eventKind = (ev) => (ev.demo ? "demo" : ev.real ? "real" : "exclusive");
 const count = {};
@@ -100,7 +88,13 @@ async function seedSessions(c) {
         }
         continue;
       }
-      // Resto de días/eventos: 4 sesiones genéricas a partir de los tags del evento
+      // Resto de días/eventos: agenda personalizada por industria, igual que sessionsFor() del frontend
+      for (const [ind, d] of Object.entries(IND)) {
+        for (const ses of generateAgenda(ev, di, ind, d, PERSONAS[ind].interests)) {
+          await upsertSession(c, { ...ses, ev: ses.eventId, industry: ind });
+        }
+      }
+      // Variante genérica (industry NULL) para usuarios sin industria
       for (let i = 0; i < 4; i++) {
         const tag = ev.tags[(di * 2 + i) % ev.tags.length];
         await upsertSession(c, { ev: ev.id, day: di, slot: i, time: TIMES[i], kind: KINDS[(i + di) % 4],
