@@ -1,0 +1,83 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: Migraciones + smoke + pruebas
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: knet
+          POSTGRES_PASSWORD: knet
+          POSTGRES_DB: knet
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U knet -d knet"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    env:
+      NODE_ENV: development
+      DATABASE_URL: postgres://knet:knet@localhost:5432/knet
+      PORT: "4000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run db:migrate
+      - run: npm run db:seed
+      - name: Arrancar la API
+        run: |
+          node src/server.js > api.log 2>&1 &
+          for i in $(seq 1 30); do curl -fs http://localhost:4000/health && exit 0; sleep 1; done
+          cat api.log; exit 1
+      - run: npm run smoke
+      - run: npm run test:ai
+      - run: npm run test:linkedin
+      - run: npm run test:stream
+      - name: Tiempo real con LISTEN/NOTIFY
+        run: npm run test:stream
+        env:
+          EVENTS_PG_NOTIFY: "true"
+      - name: Log de la API
+        if: failure()
+        run: cat api.log
+
+  docker:
+    name: Imagen Docker
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: knet
+          POSTGRES_PASSWORD: knet
+          POSTGRES_DB: knet
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U knet -d knet"
+          --health-interval 5s --health-timeout 3s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t knet-api:ci .
+      - name: La imagen migra y responde 200 en /health
+        run: |
+          docker run -d --name api --network host \
+            -e DATABASE_URL=postgres://knet:knet@localhost:5432/knet \
+            -e JWT_SECRET=ci-secret-solo-para-pruebas -e PORT=4100 knet-api:ci
+          for i in $(seq 1 30); do
+            if curl -fs http://localhost:4100/health; then echo; docker logs api; exit 0; fi
+            sleep 2
+          done
+          docker logs api; exit 1

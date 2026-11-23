@@ -3,6 +3,7 @@ import { z } from "zod";
 import { pool, query, tx } from "../../db.js";
 import { HttpError } from "../../lib/http.js";
 import { levelInfo, XP_REWARDS } from "../../lib/levels.js";
+import { publish } from "../../lib/events-bus.js";
 import { getScopes } from "../../lib/queries.js";
 import { toConnection } from "../../lib/serialize.js";
 import { awardXp } from "../../lib/xp.js";
@@ -60,7 +61,10 @@ router.post("/", async (req, res) => {
     return { row, xp };
   });
 
-  res.status(201).json({ connection: toConnection(result.row), ...result.xp, ...levelInfo(result.xp.xp) });
+  const connection = toConnection(result.row);
+  // Tiempo real: las demás sesiones abiertas del usuario se enteran sin recargar
+  publish(req.user.id, connection.status === "accepted" ? "connection.accepted" : "connection.request", { connection });
+  res.status(201).json({ connection, ...result.xp, ...levelInfo(result.xp.xp) });
 });
 
 const idParam = z.coerce.number().int().positive();
@@ -74,14 +78,17 @@ router.patch("/:id", async (req, res) => {
       "SELECT id, contact_id, status FROM connections WHERE id = $1 AND user_id = $2 FOR UPDATE", [id, req.user.id]);
     if (!cn) throw new HttpError(404, `No existe la conexión ${id}`);
     // Idempotente: aceptar una conexión ya aceptada no falla ni vuelve a sumar XP
-    if (cn.status === "pending") {
+    const changed = cn.status === "pending";
+    if (changed) {
       await c.query("UPDATE connections SET status = 'accepted', accepted_at = now() WHERE id = $1", [id]);
     }
     const xp = await awardXp(c, req.user.id, XP_REWARDS.connection, "connection", String(cn.contact_id));
     const { rows: [row] } = await c.query(`${SELECT} WHERE cn.id = $1`, [id]);
-    return { row, xp };
+    return { row, xp, changed };
   });
-  res.json({ connection: toConnection(result.row), ...result.xp, ...levelInfo(result.xp.xp) });
+  const connection = toConnection(result.row);
+  if (result.changed) publish(req.user.id, "connection.accepted", { connection });
+  res.json({ connection, ...result.xp, ...levelInfo(result.xp.xp) });
 });
 
 // DELETE /api/me/connections/:id → quita la conexión (la XP ya ganada se conserva)

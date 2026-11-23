@@ -12,7 +12,8 @@
     "db:reset": "node db/migrate.js --reset && node db/seed.js",
     "smoke": "node scripts/smoke.js",
     "test:linkedin": "node scripts/linkedin-mock.js",
-    "test:ai": "node scripts/ai-mock.js"
+    "test:ai": "node scripts/ai-mock.js",
+    "test:stream": "node scripts/stream-test.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.12.0",

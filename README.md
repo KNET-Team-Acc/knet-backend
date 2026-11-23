@@ -35,6 +35,7 @@ npm run smoke
 | `npm run db:reset` | **Borra todo** y vuelve a migrar y a cargar el seed (solo desarrollo) |
 | `npm run smoke` | Prueba todos los endpoints contra la API en marcha (incluye registro, login, refresh y legal) |
 | `npm run test:ai` | Prueba `/api/ai/*` con respuestas simuladas del proveedor (no gasta tokens ni necesita la API en marcha) |
+| `npm run test:stream` | Prueba `GET /api/me/stream` (SSE): eventos, heartbeat y reanudación. Con `EVENTS_PG_NOTIFY=true` prueba LISTEN/NOTIFY |
 | `npm run test:linkedin` | Prueba el flujo OAuth de LinkedIn simulando sus endpoints (no necesita la API en marcha) |
 
 PostgreSQL usa el puerto **5433** del host para no chocar con una instalación local en el 5432.
@@ -87,6 +88,7 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | POST | `/api/ai/chat` | AI Concierge. `{ message, history?, eventId?, day?, lang? }` → `{ reply, sources }`. RAG ligero: sesiones del día (variante de la industria) y speakers reales del evento van en el prompt; `sources` lista las sesiones citadas |
 | POST | `/api/ai/simulate` | Simulador de networking. `{ contactId | contactName, message, history?, lang? }` → `{ reply }` en la voz del contacto |
 | POST | `/api/ai/dossier` | `{ eventId, lang? }` → `{ dossier }` (mismo contrato que `/api/me/dossiers/:eventId`, con `content.generatedBy: "ai"` y `content.paraTi`). Usa check-ins, conexiones y `xp_ledger` reales |
+| GET | `/api/me/stream` | Server-Sent Events del usuario (`connection.request`, `connection.accepted`, `message.new`, `coffee.updated`). Ver «Tiempo real» |
 | GET | `/api/me/dossiers` | Todos mis dossiers |
 | GET / POST | `/api/me/dossiers/:eventId` | Lee o genera el dossier del evento. `POST { ideas?, plan?, notes? }`; el resumen de sesiones, contactos y XP lo calcula el servidor |
 
@@ -104,6 +106,40 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 - Rate limit por usuario: `AI_RATE_LIMIT` peticiones por minuto → 429 `rate_limited`. Exigen sesión y la versión legal vigente (409 `legal_outdated`).
 - **Privacidad:** al proveedor solo va lo que cubren los permisos del usuario (`aiProfile()` en `src/lib/queries.js`): nombre de pila y cargo; industria, seniority y empresa con `industry`; intereses con `interests`; las conexiones del dossier con `network`. Nunca correo, id ni foto. La key no aparece en logs ni respuestas.
 - `history` admite como máximo 12 turnos de hasta 2000 caracteres; `message`, 1000 (600 en el simulador).
+
+## Tiempo real (SSE)
+
+`GET /api/me/stream` mantiene abierta una respuesta `text/event-stream`. Cada evento lleva `id`, `event` (tipo) y `data` (JSON con `at` y el objeto afectado, p. ej. `{ connection }`).
+
+```js
+// En el navegador: EventSource no envía headers, así que el token va en la query
+const es = new EventSource(`${API_URL}/api/me/stream?access_token=${accessToken}`);
+es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)));
+```
+
+- **Heartbeat:** un comentario `: ping` cada `SSE_HEARTBEAT_MS` (25 s) para que proxies y balanceadores no corten la conexión.
+- **Reanudación:** `EventSource` reconecta solo (`retry: 5000`) y envía `Last-Event-ID`; la API reenvía los eventos que siguen en el buffer (últimos 100 por usuario, 5 min). También se acepta `?lastEventId=`.
+- **Token:** se valida al conectar. Si caduca, la conexión abierta sigue; al reconectar con un token vencido responde 401 y el cliente debe abrir el stream con uno nuevo. En desarrollo también sirve `?userId=<uuid>`.
+- **Eventos publicados hoy:** `connection.request` y `connection.accepted` (`/api/me/connections`). `message.new` y `coffee.updated` ya existen en el bus (`publish()` en `src/lib/events-bus.js`); se emitirán desde las rutas de mensajes y cafés cuando existan (#3).
+- **Varias instancias:** con `EVENTS_PG_NOTIFY=true` cada evento se publica con `NOTIFY knet_events` y todas las instancias lo reciben con `LISTEN`. Con una sola instancia basta el bus en memoria.
+- **¿WebSockets?** SSE alcanza mientras el tiempo real sea solo servidor → cliente (las acciones siguen por REST). Si se necesita un canal bidireccional (p. ej. «escribiendo…» en los DMs), se puede migrar a WebSockets reutilizando el mismo bus.
+
+## Despliegue
+
+**Imagen Docker** (`Dockerfile` multi-stage, Node 22 Alpine, usuario `node` sin privilegios, solo dependencias de producción):
+
+```bash
+docker build -t knet-api .
+docker run -p 4000:4000 --env-file .env.production knet-api
+```
+
+- Al arrancar aplica las migraciones pendientes (`docker-entrypoint.sh`). Para correrlas en un job previo (`npm run db:migrate`), define `RUN_MIGRATIONS=false`.
+- El healthcheck de la imagen y de la plataforma es `GET /health` (200 con la base de datos arriba, 503 si no).
+- Variables de producción: ver `.env.production.example`. Lo mínimo: `NODE_ENV=production`, `DATABASE_URL` con SSL (`?sslmode=require` y `DATABASE_SSL`), `CORS_ORIGIN` con el dominio del frontend, `JWT_SECRET`, `TRUST_PROXY=1` detrás del balanceador y, si se usan, las de LinkedIn e IA. `LINKEDIN_REDIRECT_URI` debe apuntar al dominio público de la API.
+- El frontend se construye con `VITE_API_URL` = URL pública de la API; ese origen va en `CORS_ORIGIN`.
+- Sirve en cualquier plataforma de contenedores (Render, Railway, Fly.io, Cloud Run, Azure Container Apps…) con un PostgreSQL 16 gestionado.
+
+**CI** (`.github/workflows/ci.yml`, en cada push a `main` y en cada PR): instala, migra y carga el seed contra un PostgreSQL de servicio, arranca la API y corre `npm run smoke`, `test:ai`, `test:linkedin` y `test:stream` (también con LISTEN/NOTIFY). Otro job construye la imagen y comprueba que migra y responde 200 en `/health`.
 
 ## Modelo de datos
 
@@ -136,3 +172,7 @@ Notas:
 - Purgar los consentimientos desvinculados cuando vence el periodo de retención (hoy el trigger impide borrarlos; haría falta un proceso controlado).
 - Cuentas demo: `DELETE /api/me` las rechaza porque son compartidas; con login real ya no se usan fuera de desarrollo.
 - Guardar en el servidor la agenda personalizada por perfil (hoy las sesiones son genéricas salvo el día 1 de `bog`).
+
+## Licencia
+
+[MIT](LICENSE) © 2026 KNET Team.
