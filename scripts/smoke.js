@@ -105,6 +105,18 @@ const dos = await check("leer dossier", "GET", "/api/me/dossiers/bog");
 console.log(`    sesiones: ${dos.dossier.content.summary.sessionsAttended.length} · contactos: ${dos.dossier.content.summary.contacts.length} · XP: ${dos.dossier.content.summary.xp}`);
 await check("dossier sin inscripción", "POST", "/api/me/dossiers/and", {}, [403]);
 
+// IA: sin AI_API_KEY los tres endpoints responden 503 ai_unavailable (con key: npm run test:ai)
+if (!process.env.AI_API_KEY) {
+  for (const [path, body] of [["/api/ai/chat", { message: "¿Qué sesión sigue?" }], ["/api/ai/simulate", { contactName: "Felipe L.", message: "Hola" }], ["/api/ai/dossier", { eventId: "bog" }]]) {
+    const r = await check("IA sin key → 503", "POST", path, body, [503]);
+    if (r?.error !== "ai_unavailable") { failed++; console.log("    ✗ debería ser ai_unavailable"); }
+  }
+  let limited = false;
+  for (let i = 0; i < 25 && !limited; i++) limited = (await call("POST", "/api/ai/chat", { message: "hola" })).status === 429;
+  console.log(`${limited ? "✓" : "✗"} 429 POST   /api/ai/chat  rate limit por usuario`);
+  if (!limited) failed++;
+}
+
 // Supresión (DELETE /api/me) con un usuario desechable: no hay endpoint para crear usuarios.
 // Cada corrida deja sus consentimientos desvinculados (user_id NULL): son inmutables a propósito.
 await check("borrar cuenta demo (prohibido)", "DELETE", "/api/me", undefined, [403]);
