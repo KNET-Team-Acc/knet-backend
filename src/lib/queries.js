@@ -52,3 +52,40 @@ export async function listCheckins(db, userId, industry, eventId = null) {
       ORDER BY c.created_at`, [userId, industry, eventId]);
   return rows.map(toCheckin);
 }
+
+/* ---------- Contexto para la IA (src/routes/ai.js) ---------- */
+
+/**
+ * Perfil que se puede enviar al proveedor del LLM: solo lo cubierto por los permisos concedidos.
+ * Nunca incluye correo, id ni foto. «profile» (nombre de pila y cargo) es obligatorio para usar KNET.
+ */
+export async function aiProfile(db, user) {
+  const scopes = await getScopes(db, user.id);
+  const p = { nombre: String(user.name || "").split(/\s+/)[0] || "Asistente", cargo: user.role || undefined };
+  if (scopes.industry) Object.assign(p, { industria: user.industry, seniority: user.seniority || undefined, empresa: user.company || undefined });
+  if (scopes.interests && user.interests?.length) p.intereses = user.interests.slice(0, 8);
+  return { profile: p, scopes };
+}
+
+/**
+ * RAG ligero del Concierge: evento, sesiones del día (variante de la industria del usuario) con su
+ * estado de check-in y speakers. eventId por defecto: el primer evento en el que está inscrito.
+ */
+export async function eventContext(db, user, eventId, day) {
+  let id = eventId;
+  if (!id) {
+    const { rows: [r] } = await db.query(
+      "SELECT event_id FROM registrations WHERE user_id = $1 ORDER BY created_at LIMIT 1", [user.id]);
+    id = r?.event_id ?? null;
+  }
+  if (!id) return null;
+  const { rows: [ev] } = await db.query(
+    `SELECT e.id, e.name, e.city, e.venue_name, e.date_label, count(d.*)::int AS days
+       FROM events e LEFT JOIN event_days d ON d.event_id = e.id WHERE e.id = $1 GROUP BY e.id`, [id]);
+  if (!ev) return null;
+  const d = Math.min(Math.max(0, day ?? 0), Math.max(0, ev.days - 1));
+  const sessions = ev.days ? await listSessions(db, ev.id, d, user.industry, user.id) : [];
+  const { rows: speakers } = await db.query(
+    "SELECT name, role, org, session_label, talk FROM speakers WHERE event_id = $1 ORDER BY id LIMIT 12", [ev.id]);
+  return { event: ev, day: d, sessions, speakers };
+}

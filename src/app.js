@@ -2,7 +2,9 @@ import cors from "cors";
 import express from "express";
 import { config } from "./config.js";
 import { errorHandler, notFound } from "./middleware/errors.js";
+import { requireLegal } from "./middleware/legal.js";
 import { resolveUser } from "./middleware/user.js";
+import aiRouter from "./routes/ai.js";
 import authRouter from "./routes/auth.js";
 import contactsRouter from "./routes/contacts.js";
 import eventsRouter from "./routes/events.js";
@@ -23,6 +25,7 @@ export function createApp() {
   api.use("/events", resolveUser({ optional: true }), eventsRouter); // catálogo: con o sin sesión
   api.use("/contacts", resolveUser({ optional: true }), contactsRouter);
   api.use("/me", resolveUser(), meRouter);
+  api.use("/ai", resolveUser(), requireLegal(), aiRouter);
   app.use("/api", api);
 
   app.use(notFound);
