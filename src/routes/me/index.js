@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { legalOutdated, legalOutdatedError } from "../../lib/auth.js";
+import { requireLegal } from "../../middleware/legal.js";
 import checkins from "./checkins.js";
 import connections from "./connections.js";
 import consents from "./consents.js";
@@ -12,11 +12,7 @@ const router = Router();
 
 // Sin bloqueo legal: re-aceptar los documentos (POST /consents) y ejercer la supresión (DELETE /api/me)
 router.use("/consents", consents);
-router.use((req, _res, next) => {
-  const erase = req.method === "DELETE" && (req.path === "/" || req.path === "");
-  if (!erase && legalOutdated(req.user)) throw legalOutdatedError();
-  next();
-});
+router.use(requireLegal((req) => req.method === "DELETE" && (req.path === "/" || req.path === "")));
 
 router.use("/", profile);                 // GET/PATCH/DELETE /api/me
 router.use("/registrations", registrations);
