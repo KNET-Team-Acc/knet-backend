@@ -7,3 +7,4 @@ node_modules
 .vscode/*
 .idea
 !.env.production.example
+.vercel

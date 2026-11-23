@@ -126,6 +126,14 @@ es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)
 
 ## Despliegue
 
+**Producción actual (Vercel + Neon):** API en https://knet-backend.vercel.app (proyecto `knet-backend`), PostgreSQL en Neon (`knet-db`, región `iad1`, conectado por la integración de Vercel, que define `DATABASE_URL` y `DATABASE_URL_UNPOOLED`). `api/index.js` exporta la app de Express como Vercel Function y `vercel.json` reescribe todas las rutas hacia ella; `.vercelignore` evita subir `.env*`.
+- Desplegar: `npx vercel deploy --prod` (el repositorio aún no está conectado a la app de GitHub de Vercel; al conectarlo, cada push a `main` desplegará solo).
+- Migraciones: `vercel env pull` y `npm run db:migrate` con `DATABASE_URL_UNPOOLED` (no se aplican al desplegar la función).
+- Variables en Vercel: `JWT_SECRET` (sensible), `TRUST_PROXY=1`, `LEGAL_VERSION`, `CORS_ORIGIN=https://knet-frontend.vercel.app`. Faltan `AI_API_KEY` y las de LinkedIn.
+- Límites en Vercel: `/api/me/stream` (SSE) se corta a los 300 s y el cliente reconecta con `Last-Event-ID`; el bus de eventos y el rate limit viven en memoria por instancia.
+
+**Contenedor (cualquier otra plataforma):**
+
 **Imagen Docker** (`Dockerfile` multi-stage, Node 22 Alpine, usuario `node` sin privilegios, solo dependencias de producción):
 
 ```bash
