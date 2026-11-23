@@ -10,6 +10,7 @@ import contactsRouter from "./routes/contacts.js";
 import eventsRouter from "./routes/events.js";
 import healthRouter from "./routes/health.js";
 import meRouter from "./routes/me/index.js";
+import { streamAuthFromQuery } from "./routes/me/stream.js";
 
 export function createApp() {
   const app = express();
@@ -24,6 +25,7 @@ export function createApp() {
   api.use("/auth", authRouter);                                  // público
   api.use("/events", resolveUser({ optional: true }), eventsRouter); // catálogo: con o sin sesión
   api.use("/contacts", resolveUser({ optional: true }), contactsRouter);
+  api.use("/me/stream", streamAuthFromQuery);                   // EventSource: token por query
   api.use("/me", resolveUser(), meRouter);
   api.use("/ai", resolveUser(), requireLegal(), aiRouter);
   app.use("/api", api);

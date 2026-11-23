@@ -7,6 +7,7 @@ import dossiers from "./dossiers.js";
 import missions from "./missions.js";
 import profile from "./profile.js";
 import registrations from "./registrations.js";
+import stream from "./stream.js";
 
 const router = Router();
 
@@ -20,5 +21,6 @@ router.use("/checkins", checkins);
 router.use("/missions", missions);
 router.use("/connections", connections);
 router.use("/dossiers", dossiers);
+router.use("/stream", stream);            // Server-Sent Events
 
 export default router;
