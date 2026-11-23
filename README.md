@@ -69,6 +69,7 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | GET | `/api/events` | Eventos (`?kind=real\|demo\|exclusive`, `?industry=tech`). Incluye `locked` y `registered` |
 | GET | `/api/events/:id` | Detalle con ficha (`info`), recinto 3D (`venue`) y speakers |
 | GET | `/api/events/:id/sessions?day=0` | Sesiones del día, en la variante de la industria del usuario, con `checkedIn` |
+| POST | `/api/events/:id/nfc-checkin` | **Tótem**: header `X-Totem-Key` (= `TOTEM_SECRET`) y opcional `X-Totem-Id`. `{ sessionCode, token \| userId }` (token QR del teléfono o UUID de la credencial) → check-in con `method: "nfc"` (+40 XP). 401 `invalid_totem`, 503 `nfc_unavailable` sin `TOTEM_SECRET`, 409 si ya hizo check-in o el token ya se usó |
 | GET | `/api/contacts` | Personas con las que se puede conectar (`?industry=`) |
 | GET | `/api/me` | Perfil, XP, nivel, permisos, estadísticas e inscripciones |
 | PATCH | `/api/me` | Edita `name`, `role`, `company`, `industry`, `seniority`, `location`, `interests`, `avatar` y `scopes` |
@@ -85,6 +86,8 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | POST | `/api/me/connections` | `{ contactId \| name, source?: "request"\|"match"\|"qr", context?, eventId? }`. Por QR queda aceptada y suma +100 XP |
 | PATCH | `/api/me/connections/:id` | `{ status: "accepted" }`: acepta una solicitud pendiente y suma +100 XP (una sola vez por contacto; repetirlo no falla) |
 | DELETE | `/api/me/connections/:id` | Quita la conexión. La XP ya ganada se conserva |
+| GET | `/api/me/qr-token` | `?eventId=` → `{ token, expiresAt, ttl, refreshIn }`: token firmado (HMAC, `QR_SECRET`) para el QR dinámico. Caduca en `QR_TTL_S` s y sirve una sola vez; pedir uno nuevo cada `refreshIn` s. 403 sin el permiso `network` |
+| POST | `/api/me/connections/scan` | `{ token, context? }` → escanea el QR de otro asistente: conexión aceptada en ambos sentidos y +100 XP a cada uno una sola vez (`conn:<uuid>`). 201 si es nueva, 200 si ya existía. 400 `invalid_qr`/`qr_expired`/`own_qr`, 409 `qr_used`, 429 (rate limit por usuario) |
 | GET | `/api/me/coffees` | Cafés 1:1 donde participo (`?status=proposed\|accepted\|declined\|done\|cancelled`). Cada uno trae `role` (`proposer`/`invitee`), `connectionId` (la conexión propia) y `with` |
 | POST | `/api/me/coffees` | `{ connectionId, slot (ISO, futuro), place?, eventId? }` → propone un café. 403 `not_connected` si la conexión no está aceptada; 409 `coffee_active` si ya hay uno pendiente o confirmado con esa persona |
 | PATCH | `/api/me/coffees/:id` | `{ status: "accepted"\|"declined"\|"done"\|"cancelled" }`. Acepta o rechaza el invitado (con un contacto del catálogo, quien propone). Aceptar suma +50 XP a cada participante con cuenta, una sola vez (`coffee:<id>`). 409 `invalid_transition` |
@@ -156,7 +159,7 @@ docker run -p 4000:4000 --env-file .env.production knet-api
 
 ## Modelo de datos
 
-`db/migrations/001_init.sql`, `002_user_erasure.sql`, `003_auth.sql` y `004_coffees_messages.sql`:
+`db/migrations/001_init.sql`, `002_user_erasure.sql`, `003_auth.sql`, `004_coffees_messages.sql` y `005_qr_nfc.sql`:
 
 - **Perfil:** `users` (con `password_hash`, `linkedin_sub`, `legal_version`, `email_verified_at`, `photo_url`), `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción).
 - **Sesiones:** `refresh_tokens` (SHA-256 del token, familia de rotación, `ON DELETE CASCADE`), `oauth_states` (state de LinkedIn, un solo uso) y `auth_handoffs` (código de canje tras LinkedIn).
@@ -164,6 +167,7 @@ docker run -p 4000:4000 --env-file .env.production knet-api
 - **Progreso:** `registrations`, `checkins`, `missions`, `mission_progress` y `xp_ledger` (cada XP sumado queda registrado y no se puede sumar dos veces; `users.xp` guarda el total).
 - **Red:** `contacts` (los matches de cada industria y los asistentes de `SUMMIT_POOL` que aparecen en el escaneo QR) y `connections`. Una conexión apunta a un contacto del catálogo (`contact_id`) o a otro usuario real (`peer_user_id`); entre usuarios reales hay dos filas espejo, una por lado.
 - **Cafés y chat:** `coffees` (`proposer_id`, `invitee_id` NULL si el invitado es un contacto del catálogo, `slot`, `place`, `status`) y `messages` (por `connection_id` de quien envía; un hilo entre usuarios reales reúne las dos filas espejo). Todo cae por `ON DELETE CASCADE` al borrar el usuario.
+- **QR/NFC:** `qr_nonces` (cada token QR se usa una vez; se purgan al caducar) y `checkins.totem_id` (tótem que registró un check-in NFC).
 - **Dossier:** `dossiers` (contenido `jsonb` por usuario y evento).
 
 Notas:
@@ -174,7 +178,7 @@ Notas:
 - **Consentimientos:** el frontend envía cada evento a `POST /api/me/consents` (`details` lleva el registro local completo, con su `idLocal` y `hashLocal`) y muestra el registro con `GET /api/me/consents`. Si la API no responde, el evento queda pendiente en el navegador y se reenvía en orden al reconectar. El hash del servidor es una cadena propia, independiente de la del navegador.
 - **Supresión y retención:** `DELETE /api/me` borra el usuario; las demás tablas se borran por `ON DELETE CASCADE`. `consents.user_id` usa `ON DELETE SET NULL` y el trigger de solo inserción permite únicamente ese cambio (pasar `user_id` a `NULL` sin tocar otra columna); cualquier otro `UPDATE` o `DELETE` sigue bloqueado. `consents.subject_id` guarda el UUID del titular sin llave foránea y es el que entra en el hash, así que la cadena sigue siendo verificable después del borrado. El registro queda **desvinculado, no anonimizado** (`payload` conserva el nombre del titular y `client` el navegador): es la prueba de la autorización (Ley 1581, art. 17) durante el periodo de retención.
 - El nivel se calcula igual que en el frontend: `floor(xp / 500) + 1`, con 5 niveles como máximo (`src/lib/levels.js`).
-- Para cambiar el esquema, agrega `db/migrations/005_<descripcion>.sql` (o el siguiente número). No edites una migración que ya se aplicó.
+- Para cambiar el esquema, agrega `db/migrations/006_<descripcion>.sql` (o el siguiente número). No edites una migración que ya se aplicó.
 
 ## Pendiente
 

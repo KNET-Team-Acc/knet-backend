@@ -1,9 +1,12 @@
 import { Router } from "express";
+import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
+import { config } from "../../config.js";
 import { pool, query, tx } from "../../db.js";
 import { HttpError } from "../../lib/http.js";
 import { levelInfo, XP_REWARDS } from "../../lib/levels.js";
 import { publish } from "../../lib/events-bus.js";
+import { consumeNonce, verifyQrToken } from "../../lib/qr.js";
 import { getScopes } from "../../lib/queries.js";
 import { toConnection } from "../../lib/serialize.js";
 import { awardXp } from "../../lib/xp.js";
@@ -70,6 +73,62 @@ router.post("/", async (req, res) => {
   // Tiempo real: las demás sesiones abiertas del usuario se enteran sin recargar
   publish(req.user.id, connection.status === "accepted" ? "connection.accepted" : "connection.request", { connection });
   res.status(201).json({ connection, ...result.xp, ...levelInfo(result.xp.xp) });
+});
+
+const scanLimiter = rateLimit({
+  windowMs: 60_000,
+  limit: config.qr.scanRateLimit,
+  keyGenerator: (req) => req.user.id,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({ error: "rate_limited", message: "Demasiados escaneos: espera un minuto" }),
+});
+
+// Crea o reactiva la fila de un lado de la conexión entre usuarios reales
+const UPSERT_PEER = `
+  INSERT INTO connections (user_id, peer_user_id, status, source, context, event_id, accepted_at)
+  VALUES ($1, $2, 'accepted', 'qr', $3, (SELECT id FROM events WHERE id = $4), now())
+  ON CONFLICT (user_id, peer_user_id) DO UPDATE
+    SET status = 'accepted', accepted_at = COALESCE(connections.accepted_at, now())
+  RETURNING id, (xmax = 0) AS created`;
+
+// POST /api/me/connections/scan { token, context? } → escanea el QR dinámico de otro asistente.
+// Crea la conexión en ambos sentidos (aceptada) y suma +100 XP a cada uno una sola vez (ref conn:<uuid>).
+// 400 invalid_qr / qr_expired / own_qr, 409 qr_used (cada token sirve una vez), 429 si se abusa.
+router.post("/scan", scanLimiter, async (req, res) => {
+  const body = z.object({
+    token: z.string().min(1).max(1000),
+    context: z.string().trim().max(280).optional(),
+  }).strict().parse(req.body ?? {});
+  const qr = verifyQrToken(body.token);
+  if (qr.userId === req.user.id) throw new HttpError(400, "No puedes escanear tu propio código", "own_qr");
+
+  const result = await tx(async (c) => {
+    const { rows: [owner] } = await c.query("SELECT id FROM users WHERE id = $1", [qr.userId]);
+    if (!owner) throw new HttpError(400, "El código QR no es válido", "invalid_qr");
+    if (!(await getScopes(c, req.user.id)).network) {
+      throw new HttpError(403, "Revocaste el permiso «network»: actívalo para sumar contactos");
+    }
+    if (!(await getScopes(c, owner.id)).network) {
+      throw new HttpError(403, "Esta persona no está compartiendo su red", "peer_network_off");
+    }
+    await consumeNonce(c, qr, req.user.id);
+    const context = body.context ?? "";
+    const { rows: [mine] } = await c.query(UPSERT_PEER, [req.user.id, owner.id, context, qr.eventId]);
+    const { rows: [theirs] } = await c.query(UPSERT_PEER, [owner.id, req.user.id, context, qr.eventId]);
+    const xp = await awardXp(c, req.user.id, XP_REWARDS.connection, "connection", `conn:${owner.id}`);
+    await awardXp(c, owner.id, XP_REWARDS.connection, "connection", `conn:${req.user.id}`);
+    const { rows: [rowMine] } = await c.query(`${SELECT} WHERE cn.id = $1`, [mine.id]);
+    const { rows: [rowTheirs] } = await c.query(`${SELECT} WHERE cn.id = $1`, [theirs.id]);
+    return { rowMine, rowTheirs, ownerId: owner.id, created: mine.created || theirs.created, xp };
+  });
+
+  const connection = toConnection(result.rowMine);
+  if (result.created) {
+    publish(req.user.id, "connection.accepted", { connection });
+    publish(result.ownerId, "connection.accepted", { connection: toConnection(result.rowTheirs) });
+  }
+  res.status(result.created ? 201 : 200).json({ connection, created: result.created, ...result.xp, ...levelInfo(result.xp.xp) });
 });
 
 const idParam = z.coerce.number().int().positive();
