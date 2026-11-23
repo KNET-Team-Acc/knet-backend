@@ -21,6 +21,12 @@ export const config = {
   // Solo en desarrollo se acepta X-User-Id y el usuario demo sin token
   devIdentity: nodeEnv === "development",
   databaseUrl: process.env.DATABASE_URL || "postgres://knet:knet@localhost:5433/knet",
+  // SSL de PostgreSQL: "true" = verifica el certificado; "no-verify" = cifra sin verificarlo (algunos
+  // proveedores gestionados con certificados propios). Vacío = lo que diga DATABASE_URL (?sslmode=…).
+  databaseSsl: process.env.DATABASE_SSL === "no-verify" ? { rejectUnauthorized: false } : process.env.DATABASE_SSL === "true" ? true : undefined,
+  // Tiempo real con varias instancias de la API: reparte los eventos SSE con LISTEN/NOTIFY de PostgreSQL
+  eventsPgNotify: process.env.EVENTS_PG_NOTIFY === "true",
+  sseHeartbeatMs: durationMs(process.env.SSE_HEARTBEAT_MS, "25000"),
   corsOrigin: list(process.env.CORS_ORIGIN, "http://localhost:5173"),
   demoUserEmail: process.env.DEMO_USER_EMAIL || "demo.tech@knet.local",
   // Proxies delante de la API (p. ej. 1 detrás del balanceador de la plataforma): el rate limit usa la IP real

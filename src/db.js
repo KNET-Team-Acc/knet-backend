@@ -5,7 +5,7 @@ import { config } from "./config.js";
 pg.types.setTypeParser(1082, (v) => v);
 pg.types.setTypeParser(20, (v) => Number(v));
 
-export const pool = new pg.Pool({ connectionString: config.databaseUrl, max: 10 });
+export const pool = new pg.Pool({ connectionString: config.databaseUrl, ssl: config.databaseSsl, max: 10 });
 
 export const query = (text, params) => pool.query(text, params);
 
