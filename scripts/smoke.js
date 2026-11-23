@@ -100,6 +100,92 @@ await check("quitar conexión", "DELETE", `/api/me/connections/${paula.id}`, und
 await check("quitar otra vez", "DELETE", `/api/me/connections/${paula.id}`, undefined, [404]);
 await check("conexión inexistente", "PATCH", "/api/me/connections/999999", { status: "accepted" }, [404]);
 
+// ───── Cafés 1:1 y chat directo ─────
+const energiaId = userId;
+const soon = new Date(Date.now() + 86_400_000).toISOString();
+const accepted = await check("conexiones aceptadas", "GET", "/api/me/connections?status=accepted");
+const felipe = accepted.connections.find((c) => c.contact.name === "Felipe L.");
+await check("café con horario pasado", "POST", "/api/me/coffees", { connectionId: felipe.id, slot: "2020-01-01T10:00:00Z" }, [400]);
+const cafe = await check("proponer café (contacto del catálogo)", "POST", "/api/me/coffees", { connectionId: felipe.id, slot: soon, place: "Lounge 2" }, [201]);
+await check("segundo café activo con la misma persona", "POST", "/api/me/coffees", { connectionId: felipe.id, slot: soon }, [409]);
+const cafeOk = await check("aceptar café (respuesta simulada)", "PATCH", `/api/me/coffees/${cafe.coffee.id}`, { status: "accepted" });
+if (cafeOk?.xpAwarded !== 50 || cafeOk?.coffee?.status !== "accepted") { failed++; console.log("    ✗ aceptar debería sumar 50 XP"); }
+const cafeOk2 = await check("aceptar otra vez (idempotente)", "PATCH", `/api/me/coffees/${cafe.coffee.id}`, { status: "accepted" });
+if (cafeOk2?.xpAwarded !== 0) { failed++; console.log("    ✗ aceptar dos veces no debería sumar XP"); }
+await check("completar café", "PATCH", `/api/me/coffees/${cafe.coffee.id}`, { status: "done" });
+await check("café completado no vuelve a aceptarse", "PATCH", `/api/me/coffees/${cafe.coffee.id}`, { status: "declined" }, [409]);
+const misCafes = await check("mis cafés", "GET", "/api/me/coffees?status=done");
+if (!misCafes?.coffees?.some((c) => c.id === cafe.coffee.id && c.role === "proposer" && c.with?.name === "Felipe L.")) {
+  failed++; console.log("    ✗ el café completado debería aparecer como propuesto a Felipe L.");
+}
+await check("mensaje a contacto del catálogo", "POST", `/api/me/messages/${felipe.id}`, { body: "¡Hola Felipe! ¿Café mañana?" }, [201]);
+const pend = await check("solicitud pendiente", "POST", "/api/me/connections", { name: "Paula B." }, [201]);
+const noCafe = await check("café con conexión pendiente → 403", "POST", "/api/me/coffees", { connectionId: pend.connection.id, slot: soon }, [403]);
+const noMsg = await check("mensaje con conexión pendiente → 403", "POST", `/api/me/messages/${pend.connection.id}`, { body: "hola" }, [403]);
+if (noCafe?.error !== "not_connected" || noMsg?.error !== "not_connected") { failed++; console.log("    ✗ debería ser not_connected"); }
+await check("quitar solicitud pendiente", "DELETE", `/api/me/connections/${pend.connection.id}`, undefined, [204]);
+
+// Entre usuarios reales: dos filas espejo. Mientras no exista el escaneo de QR, la pareja se crea por SQL.
+const LEGAL_V = process.env.LEGAL_VERSION || "1.2";
+const realUser = async (name) => (await sql(
+  `INSERT INTO users (email, name, industry, role, company, legal_version) VALUES ($1, $2, 'tech', 'CTO', 'Acme', $3) RETURNING id`,
+  [`smoke.${name.toLowerCase()}.${Date.now()}@knet.local`, `Smoke ${name}`, LEGAL_V])).rows[0].id;
+const ana = await realUser("Ana"), beto = await realUser("Beto"), caro = await realUser("Caro");
+await sql(`INSERT INTO connections (user_id, peer_user_id, status, source, accepted_at)
+           VALUES ($1, $2, 'accepted', 'qr', now()), ($2, $1, 'accepted', 'qr', now())`, [ana, beto]);
+userId = ana;
+const anaConn = (await check("conexiones de Ana", "GET", "/api/me/connections")).connections.find((c) => c.contact.userId === beto);
+userId = beto;
+const betoConn = (await check("conexiones de Beto", "GET", "/api/me/connections")).connections.find((c) => c.contact.userId === ana);
+if (!anaConn || !betoConn || anaConn.contact.name !== "Smoke Beto" || anaConn.contact.headline !== "CTO · Acme") {
+  failed++; console.log("    ✗ cada lado debería ver al otro como conexión");
+}
+userId = caro;
+await check("Caro no lee el chat de Ana y Beto", "GET", `/api/me/messages/${anaConn.id}`, undefined, [404]);
+await check("Caro no escribe en él", "POST", `/api/me/messages/${anaConn.id}`, { body: "intruso" }, [404]);
+await check("Caro no ve cafés ajenos", "PATCH", "/api/me/coffees/999999", { status: "accepted" }, [404]);
+userId = ana;
+await check("mensaje vacío", "POST", `/api/me/messages/${anaConn.id}`, { body: "   " }, [400]);
+await check("mensaje demasiado largo", "POST", `/api/me/messages/${anaConn.id}`, { body: "x".repeat(2001) }, [400]);
+for (const body of ["Hola Beto", "¿Viste la charla de RAG?", "Te propongo un café"]) {
+  await check("Ana escribe", "POST", `/api/me/messages/${anaConn.id}`, { body }, [201]);
+}
+userId = beto;
+await check("Beto responde", "POST", `/api/me/messages/${betoConn.id}`, { body: "¡Claro, Ana!" }, [201]);
+const p1 = await check("chat de Beto, página 1", "GET", `/api/me/messages/${betoConn.id}?limit=2`);
+const p2 = await check("chat de Beto, página 2", "GET", `/api/me/messages/${betoConn.id}?limit=2&before=${p1?.nextCursor}`);
+const thread = [...(p2?.messages ?? []), ...(p1?.messages ?? [])];
+if (thread.map((m) => m.body).join("|") !== "Hola Beto|¿Viste la charla de RAG?|Te propongo un café|¡Claro, Ana!"
+    || p2?.nextCursor !== null || !thread.at(-1)?.fromMe || thread[0]?.fromMe) {
+  failed++; console.log("    ✗ el hilo paginado debería tener los 4 mensajes en orden");
+}
+userId = ana;
+const c1 = await check("Ana propone café a Beto", "POST", "/api/me/coffees", { connectionId: anaConn.id, slot: soon, place: "Cafetería piso 2" }, [201]);
+await check("Beto no puede proponer otro mientras tanto", "POST", "/api/me/coffees", { connectionId: anaConn.id, slot: soon }, [409]);
+await check("Ana no acepta su propia invitación", "PATCH", `/api/me/coffees/${c1.coffee.id}`, { status: "accepted" }, [403]);
+userId = beto;
+const inv = (await check("cafés de Beto", "GET", "/api/me/coffees?status=proposed")).coffees.find((c) => c.id === c1.coffee.id);
+if (inv?.role !== "invitee" || inv?.connectionId !== betoConn.id || inv?.with?.name !== "Smoke Ana") {
+  failed++; console.log("    ✗ Beto debería ver el café como invitado, con su propia conexión");
+}
+const a1 = await check("Beto acepta el café", "PATCH", `/api/me/coffees/${c1.coffee.id}`, { status: "accepted" });
+const a2 = await check("Beto acepta otra vez", "PATCH", `/api/me/coffees/${c1.coffee.id}`, { status: "accepted" });
+const { rows: [{ xp: anaXp }] } = await sql("SELECT xp FROM users WHERE id = $1", [ana]);
+if (a1?.xpAwarded !== 50 || a2?.xpAwarded !== 0 || anaXp !== 50) { failed++; console.log("    ✗ aceptar debería dar 50 XP a cada uno, una sola vez"); }
+userId = ana;
+const delAna = await check("Ana borra su cuenta", "DELETE", "/api/me");
+console.log(`    borrado: cafés ${delAna?.deleted?.coffees} · mensajes ${delAna?.deleted?.messages}`);
+const { rows: [left] } = await sql(
+  `SELECT (SELECT count(*) FROM coffees WHERE proposer_id = $1 OR invitee_id = $1)::int AS coffees,
+          (SELECT count(*) FROM messages m JOIN connections cn ON cn.id = m.connection_id
+            WHERE m.sender_id = $1 OR cn.user_id = $1 OR cn.peer_user_id = $1)::int AS messages,
+          (SELECT count(*) FROM connections WHERE user_id = $1 OR peer_user_id = $1)::int AS connections`, [ana]);
+if (delAna?.deleted?.coffees !== 1 || delAna?.deleted?.messages !== 4 || left.coffees + left.messages + left.connections !== 0) {
+  failed++; console.log(`    ✗ borrar la cuenta debería eliminar sus cafés, mensajes y conexiones: ${JSON.stringify(left)}`);
+}
+for (const id of [beto, caro]) { userId = id; await check("limpiar usuario de prueba", "DELETE", "/api/me"); }
+userId = energiaId;
+
 await check("generar dossier", "POST", "/api/me/dossiers/bog", { ideas: ["Los gemelos digitales rinden más en activos críticos."], plan: ["Priorizar 2 activos críticos"] }, [200, 201]);
 const dos = await check("leer dossier", "GET", "/api/me/dossiers/bog");
 console.log(`    sesiones: ${dos.dossier.content.summary.sessionsAttended.length} · contactos: ${dos.dossier.content.summary.contacts.length} · XP: ${dos.dossier.content.summary.xp}`);

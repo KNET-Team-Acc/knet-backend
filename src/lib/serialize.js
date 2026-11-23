@@ -110,7 +110,45 @@ export const toConnection = (r) => ({
   eventId: r.event_id,
   createdAt: r.created_at,
   acceptedAt: r.accepted_at,
-  contact: toContact(r.contact),
+  // Contacto del catálogo o, en conexiones entre usuarios reales, la tarjeta pública del otro usuario
+  contact: r.contact ? toContact(r.contact) : toPeer(r.peer),
+});
+
+/** Tarjeta pública de otro usuario: sin correo ni datos sensibles */
+export const toPeer = (u) => u && ({
+  id: null,
+  userId: u.id,
+  name: u.name,
+  initials: initialsOf(u.name),
+  headline: [u.role, u.company].filter(Boolean).join(" · "),
+  industry: u.industry,
+  affinity: null,
+  matchReason: "",
+  interests: [],
+  likes: [],
+  goal: "",
+});
+
+export const toCoffee = (c) => ({
+  id: c.id,
+  connectionId: c.connection_id,
+  role: c.role,                       // proposer | invitee (desde el punto de vista de quien consulta)
+  with: c.with_name === undefined ? undefined : { name: c.with_name, initials: initialsOf(c.with_name), userId: c.with_user_id ?? null },
+  eventId: c.event_id,
+  slot: c.slot,
+  place: c.place,
+  status: c.status,
+  respondedAt: c.responded_at,
+  createdAt: c.created_at,
+  updatedAt: c.updated_at,
+});
+
+export const toMessage = (m, viewerId) => ({
+  id: m.id,
+  fromMe: m.sender_id === viewerId,
+  body: m.body,
+  createdAt: m.created_at,
+  readAt: m.read_at,
 });
 
 export const toConsent = (c) => ({

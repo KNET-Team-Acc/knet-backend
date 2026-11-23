@@ -15,7 +15,11 @@ export async function dossierSummary(db, user, eventId) {
 
   const checkins = await listCheckins(db, user.id, user.industry, ev.id);
   const { rows: contacts } = await db.query(
-    `SELECT ct.name, ct.headline, cn.context FROM connections cn JOIN contacts ct ON ct.id = cn.contact_id
+    `SELECT COALESCE(ct.name, pu.name) AS name,
+            COALESCE(ct.headline, concat_ws(' · ', NULLIF(pu.role, ''), NULLIF(pu.company, ''))) AS headline, cn.context
+       FROM connections cn
+       LEFT JOIN contacts ct ON ct.id = cn.contact_id
+       LEFT JOIN users pu ON pu.id = cn.peer_user_id
       WHERE cn.user_id = $1 AND cn.status = 'accepted' AND (cn.event_id IS NULL OR cn.event_id = $2)
       ORDER BY cn.accepted_at`, [user.id, ev.id]);
   const { rows: [{ missions, xp }] } = await db.query(
