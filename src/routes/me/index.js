@@ -1,11 +1,14 @@
 import { Router } from "express";
 import { requireLegal } from "../../middleware/legal.js";
 import checkins from "./checkins.js";
+import coffees from "./coffees.js";
 import connections from "./connections.js";
 import consents from "./consents.js";
 import dossiers from "./dossiers.js";
+import messages from "./messages.js";
 import missions from "./missions.js";
 import profile from "./profile.js";
+import qr from "./qr.js";
 import registrations from "./registrations.js";
 import stream from "./stream.js";
 
@@ -20,6 +23,9 @@ router.use("/registrations", registrations);
 router.use("/checkins", checkins);
 router.use("/missions", missions);
 router.use("/connections", connections);
+router.use("/qr-token", qr);
+router.use("/coffees", coffees);
+router.use("/messages", messages);
 router.use("/dossiers", dossiers);
 router.use("/stream", stream);            // Server-Sent Events
 

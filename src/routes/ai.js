@@ -124,7 +124,11 @@ router.post("/dossier", async (req, res) => {
     evento: { nombre: summary.event.name, ciudad: summary.event.city },
     sesionesConCheckIn: summary.sessionsAttended.map((s) => s.title).filter(Boolean),
     // La red solo se comparte con el proveedor si el permiso «network» está concedido
-    conexiones: scopes.network ? summary.contacts.map((c) => ({ nombre: c.name, titular: c.headline, contexto: c.context || undefined })) : `${summary.contacts.length} (sin permiso para detallarlas)`,
+    // Otros usuarios reales no autorizaron enviar sus datos al proveedor: de ellos solo va el número
+    conexiones: scopes.network
+      ? summary.contacts.filter((c) => !c.isUser).map((c) => ({ nombre: c.name, titular: c.headline, contexto: c.context || undefined }))
+      : `${summary.contacts.length} (sin permiso para detallarlas)`,
+    conexionesConAsistentes: scopes.network ? summary.contacts.filter((c) => c.isUser).length : undefined,
     misionesCompletadas: summary.missionsCompleted,
     xp: { total: summary.xp, nivel: summary.level, nombreNivel: summary.levelName, porMotivo: xpByReason },
   };

@@ -5,7 +5,7 @@
 export const XP_PER_LEVEL = 500;
 export const LEVELS = ["Explorador", "Desarrollador", "Integrador", "Arquitecto", "Innovador"];
 
-export const XP_REWARDS = { checkin: 40, connection: 100 };
+export const XP_REWARDS = { checkin: 40, connection: 100, coffee: 50 };
 
 export function levelInfo(xp) {
   const level = Math.min(Math.floor(xp / XP_PER_LEVEL) + 1, LEVELS.length);

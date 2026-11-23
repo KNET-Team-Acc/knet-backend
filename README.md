@@ -70,6 +70,7 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | GET | `/api/events` | Eventos (`?kind=real\|demo\|exclusive`, `?industry=tech`). Incluye `locked` y `registered` |
 | GET | `/api/events/:id` | Detalle con ficha (`info`), recinto 3D (`venue`) y speakers |
 | GET | `/api/events/:id/sessions?day=0&industry=tech` | Agenda del día personalizada por industria (la del perfil, o `industry` si se envía), con `why` y `checkedIn` |
+| POST | `/api/events/:id/nfc-checkin` | **Tótem**: header `X-Totem-Key` (= `TOTEM_SECRET`) y opcional `X-Totem-Id`. `{ sessionCode, token \| userId }` (token QR del teléfono o UUID de la credencial) → check-in con `method: "nfc"` (+40 XP). 401 `invalid_totem`, 503 `nfc_unavailable` sin `TOTEM_SECRET`, 409 si ya hizo check-in o el token ya se usó |
 | GET | `/api/contacts` | Personas con las que se puede conectar (`?industry=`) |
 | GET | `/api/me` | Perfil, XP, nivel, permisos, estadísticas e inscripciones |
 | PATCH | `/api/me` | Edita `name`, `role`, `company`, `industry`, `seniority`, `location`, `interests`, `avatar` y `scopes` |
@@ -86,6 +87,13 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | POST | `/api/me/connections` | `{ contactId \| name, source?: "request"\|"match"\|"qr", context?, eventId? }`. Por QR queda aceptada y suma +100 XP |
 | PATCH | `/api/me/connections/:id` | `{ status: "accepted" }`: acepta una solicitud pendiente y suma +100 XP (una sola vez por contacto; repetirlo no falla) |
 | DELETE | `/api/me/connections/:id` | Quita la conexión. La XP ya ganada se conserva |
+| GET | `/api/me/qr-token` | `?eventId=` → `{ token, expiresAt, ttl, refreshIn }`: token firmado (HMAC, `QR_SECRET`) para el QR dinámico. Caduca en `QR_TTL_S` s y sirve una sola vez; pedir uno nuevo cada `refreshIn` s. 403 sin el permiso `network` |
+| POST | `/api/me/connections/scan` | `{ token, context? }` → escanea el QR de otro asistente: conexión aceptada en ambos sentidos y +100 XP a cada uno una sola vez (`conn:<uuid>`). 201 si es nueva, 200 si ya existía. 400 `invalid_qr`/`qr_expired`/`own_qr`, 409 `qr_used`, 429 (rate limit por usuario) |
+| GET | `/api/me/coffees` | Cafés 1:1 donde participo (`?status=proposed\|accepted\|declined\|done\|cancelled`). Cada uno trae `role` (`proposer`/`invitee`), `connectionId` (la conexión propia) y `with` |
+| POST | `/api/me/coffees` | `{ connectionId, slot (ISO, futuro), place?, eventId? }` → propone un café. 403 `not_connected` si la conexión no está aceptada; 409 `coffee_active` si ya hay uno pendiente o confirmado con esa persona |
+| PATCH | `/api/me/coffees/:id` | `{ status: "accepted"\|"declined"\|"done"\|"cancelled" }`. Acepta o rechaza el invitado (con un contacto del catálogo, quien propone). Aceptar suma +50 XP a cada participante con cuenta, una sola vez (`coffee:<id>`). 409 `invalid_transition` |
+| GET | `/api/me/messages/:connId` | Chat con esa conexión, del más antiguo al más reciente (`?limit=30&before=<nextCursor>`). Marca como leídos los recibidos. 404 si la conexión no es mía |
+| POST | `/api/me/messages/:connId` | `{ body }` (1–2000 caracteres) → envía un mensaje. 403 `not_connected` si la conexión no está aceptada |
 | POST | `/api/ai/chat` | AI Concierge. `{ message, history?, eventId?, day?, lang? }` → `{ reply, sources }`. RAG ligero: sesiones del día (variante de la industria) y speakers reales del evento van en el prompt; `sources` lista las sesiones citadas |
 | POST | `/api/ai/simulate` | Simulador de networking. `{ contactId | contactName, message, history?, lang? }` → `{ reply }` en la voz del contacto |
 | POST | `/api/ai/dossier` | `{ eventId, lang? }` → `{ dossier }` (mismo contrato que `/api/me/dossiers/:eventId`, con `content.generatedBy: "ai"` y `content.paraTi`). Usa check-ins, conexiones y `xp_ledger` reales |
@@ -121,7 +129,7 @@ es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)
 - **Heartbeat:** un comentario `: ping` cada `SSE_HEARTBEAT_MS` (25 s) para que proxies y balanceadores no corten la conexión.
 - **Reanudación:** `EventSource` reconecta solo (`retry: 5000`) y envía `Last-Event-ID`; la API reenvía los eventos que siguen en el buffer (últimos 100 por usuario, 5 min). También se acepta `?lastEventId=`.
 - **Token:** se valida al conectar. Si caduca, la conexión abierta sigue; al reconectar con un token vencido responde 401 y el cliente debe abrir el stream con uno nuevo. En desarrollo también sirve `?userId=<uuid>`.
-- **Eventos publicados hoy:** `connection.request` y `connection.accepted` (`/api/me/connections`). `message.new` y `coffee.updated` ya existen en el bus (`publish()` en `src/lib/events-bus.js`); se emitirán desde las rutas de mensajes y cafés cuando existan (#3).
+- **Eventos publicados hoy:** `connection.request` y `connection.accepted` (`/api/me/connections`), `message.new` (`{ connectionId, message }`, con el `connectionId` de quien lo recibe) y `coffee.updated` (`{ coffeeId, status }`, a los dos participantes).
 - **Varias instancias:** con `EVENTS_PG_NOTIFY=true` cada evento se publica con `NOTIFY knet_events` y todas las instancias lo reciben con `LISTEN`. Con una sola instancia basta el bus en memoria.
 - **¿WebSockets?** SSE alcanza mientras el tiempo real sea solo servidor → cliente (las acciones siguen por REST). Si se necesita un canal bidireccional (p. ej. «escribiendo…» en los DMs), se puede migrar a WebSockets reutilizando el mismo bus.
 
@@ -152,13 +160,15 @@ docker run -p 4000:4000 --env-file .env.production knet-api
 
 ## Modelo de datos
 
-`db/migrations/001_init.sql`, `002_user_erasure.sql` y `003_auth.sql`:
+`db/migrations/001_init.sql`, `002_user_erasure.sql`, `003_auth.sql`, `004_coffees_messages.sql` y `005_qr_nfc.sql`:
 
 - **Perfil:** `users` (con `password_hash`, `linkedin_sub`, `legal_version`, `email_verified_at`, `photo_url`), `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción).
 - **Sesiones:** `refresh_tokens` (SHA-256 del token, familia de rotación, `ON DELETE CASCADE`), `oauth_states` (state de LinkedIn, un solo uso) y `auth_handoffs` (código de canje tras LinkedIn).
 - **Catálogo:** `industries`, `events`, `event_days`, `speakers` y `sessions` (`code` = `evento:día:slot`, igual que en el frontend).
 - **Progreso:** `registrations`, `checkins`, `missions`, `mission_progress` y `xp_ledger` (cada XP sumado queda registrado y no se puede sumar dos veces; `users.xp` guarda el total).
-- **Red:** `contacts` (los matches de cada industria y los asistentes de `SUMMIT_POOL` que aparecen en el escaneo QR) y `connections`.
+- **Red:** `contacts` (los matches de cada industria y los asistentes de `SUMMIT_POOL` que aparecen en el escaneo QR) y `connections`. Una conexión apunta a un contacto del catálogo (`contact_id`) o a otro usuario real (`peer_user_id`); entre usuarios reales hay dos filas espejo, una por lado.
+- **Cafés y chat:** `coffees` (`proposer_id`, `invitee_id` NULL si el invitado es un contacto del catálogo, `slot`, `place`, `status`) y `messages` (por `connection_id` de quien envía; un hilo entre usuarios reales reúne las dos filas espejo). Todo cae por `ON DELETE CASCADE` al borrar el usuario.
+- **QR/NFC:** `qr_nonces` (cada token QR se usa una vez; se purgan al caducar) y `checkins.totem_id` (tótem que registró un check-in NFC).
 - **Dossier:** `dossiers` (contenido `jsonb` por usuario y evento).
 
 Notas:
@@ -169,14 +179,14 @@ Notas:
 - **Consentimientos:** el frontend envía cada evento a `POST /api/me/consents` (`details` lleva el registro local completo, con su `idLocal` y `hashLocal`) y muestra el registro con `GET /api/me/consents`. Si la API no responde, el evento queda pendiente en el navegador y se reenvía en orden al reconectar. El hash del servidor es una cadena propia, independiente de la del navegador.
 - **Supresión y retención:** `DELETE /api/me` borra el usuario; las demás tablas se borran por `ON DELETE CASCADE`. `consents.user_id` usa `ON DELETE SET NULL` y el trigger de solo inserción permite únicamente ese cambio (pasar `user_id` a `NULL` sin tocar otra columna); cualquier otro `UPDATE` o `DELETE` sigue bloqueado. `consents.subject_id` guarda el UUID del titular sin llave foránea y es el que entra en el hash, así que la cadena sigue siendo verificable después del borrado. El registro queda **desvinculado, no anonimizado** (`payload` conserva el nombre del titular y `client` el navegador): es la prueba de la autorización (Ley 1581, art. 17) durante el periodo de retención.
 - El nivel se calcula igual que en el frontend: `floor(xp / 500) + 1`, con 5 niveles como máximo (`src/lib/levels.js`).
-- Para cambiar el esquema, agrega `db/migrations/004_<descripcion>.sql` (o el siguiente número). No edites una migración que ya se aplicó.
+- Para cambiar el esquema, agrega `db/migrations/006_<descripcion>.sql` (o el siguiente número). No edites una migración que ya se aplicó.
 
 ## Pendiente
 
 - Verificación de correo y recuperación de contraseña para las cuentas con contraseña.
 - Importar cargo y empresa de LinkedIn (requiere productos de LinkedIn fuera de OpenID Connect).
 - Usar la agenda personalizada del servidor en el RAG del Concierge cuando exista (#4).
-- Pasar a la base de datos los DMs, el chat del Concierge, las notificaciones y las recompensas del avatar.
+- Pasar a la base de datos el chat del Concierge, las notificaciones y las recompensas del avatar.
 - Endpoint de administración para que el Responsable consulte y exporte el registro de consentimientos de todos los usuarios (hoy `GET /api/me/consents` solo devuelve el del usuario actual).
 - Purgar los consentimientos desvinculados cuando vence el periodo de retención (hoy el trigger impide borrarlos; haría falta un proceso controlado).
 - Cuentas demo: `DELETE /api/me` las rechaza porque son compartidas; con login real ya no se usan fuera de desarrollo.

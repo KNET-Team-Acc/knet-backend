@@ -128,6 +128,9 @@ router.delete("/", async (req, res) => {
               (SELECT count(*) FROM mission_progress WHERE user_id = $1)::int AS missions,
               (SELECT count(*) FROM xp_ledger WHERE user_id = $1)::int AS "xpEntries",
               (SELECT count(*) FROM connections WHERE user_id = $1)::int AS connections,
+              (SELECT count(*) FROM coffees WHERE proposer_id = $1 OR invitee_id = $1)::int AS coffees,
+              (SELECT count(*) FROM messages WHERE sender_id = $1
+                  OR connection_id IN (SELECT id FROM connections WHERE user_id = $1 OR peer_user_id = $1))::int AS messages,
               (SELECT count(*) FROM dossiers WHERE user_id = $1)::int AS dossiers,
               (SELECT count(*) FROM refresh_tokens WHERE user_id = $1)::int AS "refreshTokens"`, [u.id]);
     await appendConsent(c, u.id, "supresion", { details: { motivo: "Solicitud del titular (DELETE /api/me)", borrado: { profile: 1, ...deleted } } }, clientInfo(req));
