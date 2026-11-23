@@ -37,6 +37,7 @@ npm run smoke
 | `npm run test:ai` | Prueba `/api/ai/*` con respuestas simuladas del proveedor (no gasta tokens ni necesita la API en marcha) |
 | `npm run test:stream` | Prueba `GET /api/me/stream` (SSE): eventos, heartbeat y reanudación. Con `EVENTS_PG_NOTIFY=true` prueba LISTEN/NOTIFY |
 | `npm run test:linkedin` | Prueba el flujo OAuth de LinkedIn simulando sus endpoints (no necesita la API en marcha) |
+| `npm run parity` | Compara la agenda con `sessionsFor()` del frontend (`FRONTEND_DIR`, `../knet-frontend` por defecto) y, si la API está en marcha, también la respuesta de la API |
 
 PostgreSQL usa el puerto **5433** del host para no chocar con una instalación local en el 5432.
 Para entrar a la consola: `docker exec -it knet-db psql -U knet`.
@@ -68,7 +69,7 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | POST | `/api/auth/exchange` | `{ code }` → `{ user, created, linkedinScopes, accessToken, refreshToken, … }` |
 | GET | `/api/events` | Eventos (`?kind=real\|demo\|exclusive`, `?industry=tech`). Incluye `locked` y `registered` |
 | GET | `/api/events/:id` | Detalle con ficha (`info`), recinto 3D (`venue`) y speakers |
-| GET | `/api/events/:id/sessions?day=0` | Sesiones del día, en la variante de la industria del usuario, con `checkedIn` |
+| GET | `/api/events/:id/sessions?day=0&industry=tech` | Agenda del día personalizada por industria (la del perfil, o `industry` si se envía), con `why` y `checkedIn` |
 | GET | `/api/contacts` | Personas con las que se puede conectar (`?industry=`) |
 | GET | `/api/me` | Perfil, XP, nivel, permisos, estadísticas e inscripciones |
 | PATCH | `/api/me` | Edita `name`, `role`, `company`, `industry`, `seniority`, `location`, `interests`, `avatar` y `scopes` |
@@ -164,7 +165,7 @@ Notas:
 
 - **Datos del seed:** `db/data/` es una copia de los archivos de `src/data/` del frontend (`events`, `gamification`, `industries`, `privacy`, `venues`). Si el frontend los cambia, cópialos de nuevo aquí y corre `npm run db:seed`.
 - La agenda del **día 1 de `bog`** tiene una variante por industria, como en el frontend (`IND[*].agenda`).
-  Las demás sesiones son genéricas: usan las mismas plantillas que `sessionsFor()`, pero sin personalizarlas por perfil, así que los títulos pueden no coincidir con los que muestra el frontend hoy. Los códigos sí coinciden.
+  Las demás sesiones también se siembran por industria con `generateAgenda()` (`src/lib/agenda.js`), port de `sessionsFor()`: mismos códigos `evento:día:slot`, títulos, horas, salas y `why` que el frontend. Igual que allí, se personalizan con los intereses de la persona de la industria (`PERSONAS`), no con los del perfil. Hay además una variante genérica (`industry` NULL) para usuarios sin industria. `npm run parity` verifica la paridad.
 - **Consentimientos:** el frontend envía cada evento a `POST /api/me/consents` (`details` lleva el registro local completo, con su `idLocal` y `hashLocal`) y muestra el registro con `GET /api/me/consents`. Si la API no responde, el evento queda pendiente en el navegador y se reenvía en orden al reconectar. El hash del servidor es una cadena propia, independiente de la del navegador.
 - **Supresión y retención:** `DELETE /api/me` borra el usuario; las demás tablas se borran por `ON DELETE CASCADE`. `consents.user_id` usa `ON DELETE SET NULL` y el trigger de solo inserción permite únicamente ese cambio (pasar `user_id` a `NULL` sin tocar otra columna); cualquier otro `UPDATE` o `DELETE` sigue bloqueado. `consents.subject_id` guarda el UUID del titular sin llave foránea y es el que entra en el hash, así que la cadena sigue siendo verificable después del borrado. El registro queda **desvinculado, no anonimizado** (`payload` conserva el nombre del titular y `client` el navegador): es la prueba de la autorización (Ley 1581, art. 17) durante el periodo de retención.
 - El nivel se calcula igual que en el frontend: `floor(xp / 500) + 1`, con 5 niveles como máximo (`src/lib/levels.js`).

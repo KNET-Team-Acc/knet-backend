@@ -41,16 +41,27 @@ router.get("/:id", async (req, res) => {
   res.json({ event: { ...toEvent(ev, req.user?.xp), info: ev.info, venue: ev.venue, speakers } });
 });
 
-// GET /api/events/:id/sessions?day=0 → sesiones del día (variante de la industria del usuario)
+const sessionsQuery = z.object({
+  day: z.coerce.number().int().min(0).default(0),
+  industry: z.string().max(40).optional(),
+});
+
+// GET /api/events/:id/sessions?day=0&industry=tech → agenda del día personalizada por industria.
+// Sin `industry` se usa la del perfil; si se envía, tiene prioridad. Mismas sesiones que sessionsFor() del frontend.
 router.get("/:id/sessions", async (req, res) => {
-  const { day } = z.object({ day: z.coerce.number().int().min(0).default(0) }).parse(req.query);
+  const { day, industry: asked } = sessionsQuery.parse(req.query);
+  if (asked !== undefined) {
+    const { rowCount } = await query("SELECT 1 FROM industries WHERE id = $1", [asked]);
+    if (!rowCount) throw new HttpError(400, `No existe la industria ${asked}`);
+  }
+  const industry = asked ?? req.user?.industry ?? null;
   const { rows: [ev] } = await query(
     `SELECT e.id, count(d.*)::int AS days FROM events e LEFT JOIN event_days d ON d.event_id = e.id
       WHERE e.id = $1 GROUP BY e.id`, [req.params.id]);
   if (!ev) throw new HttpError(404, `No existe el evento ${req.params.id}`);
   if (day >= ev.days) throw new HttpError(404, `El evento ${ev.id} tiene ${ev.days} día(s); day va de 0 a ${ev.days - 1}`);
-  const sessions = await listSessions(pool, ev.id, day, req.user?.industry ?? null, req.user?.id ?? null);
-  res.json({ eventId: ev.id, day, sessions });
+  const sessions = await listSessions(pool, ev.id, day, industry, req.user?.id ?? null);
+  res.json({ eventId: ev.id, day, industry, sessions });
 });
 
 export default router;
