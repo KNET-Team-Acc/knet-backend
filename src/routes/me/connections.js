@@ -11,8 +11,13 @@ import { awardXp } from "../../lib/xp.js";
 const router = Router();
 
 const SELECT = `
-  SELECT cn.id, cn.status, cn.source, cn.context, cn.event_id, cn.created_at, cn.accepted_at, to_jsonb(ct) AS contact
-    FROM connections cn JOIN contacts ct ON ct.id = cn.contact_id`;
+  SELECT cn.id, cn.status, cn.source, cn.context, cn.event_id, cn.created_at, cn.accepted_at,
+         to_jsonb(ct) AS contact,
+         CASE WHEN pu.id IS NOT NULL THEN jsonb_build_object(
+           'id', pu.id, 'name', pu.name, 'role', pu.role, 'company', pu.company, 'industry', pu.industry) END AS peer
+    FROM connections cn
+    LEFT JOIN contacts ct ON ct.id = cn.contact_id
+    LEFT JOIN users pu ON pu.id = cn.peer_user_id`;
 
 const postSchema = z.object({
   contactId: z.number().int().positive().optional(),
@@ -69,20 +74,23 @@ router.post("/", async (req, res) => {
 
 const idParam = z.coerce.number().int().positive();
 
+// Referencia de XP: id del contacto del catálogo, o conn:<uuid> si es otro usuario real
+export const connectionXpRef = (cn) => (cn.contact_id != null ? String(cn.contact_id) : `conn:${cn.peer_user_id}`);
+
 // PATCH /api/me/connections/:id { status: "accepted" } → acepta una solicitud pendiente (+100 XP una sola vez)
 router.patch("/:id", async (req, res) => {
   const id = idParam.parse(req.params.id);
   z.object({ status: z.literal("accepted") }).strict().parse(req.body ?? {});
   const result = await tx(async (c) => {
     const { rows: [cn] } = await c.query(
-      "SELECT id, contact_id, status FROM connections WHERE id = $1 AND user_id = $2 FOR UPDATE", [id, req.user.id]);
+      "SELECT id, contact_id, peer_user_id, status FROM connections WHERE id = $1 AND user_id = $2 FOR UPDATE", [id, req.user.id]);
     if (!cn) throw new HttpError(404, `No existe la conexión ${id}`);
     // Idempotente: aceptar una conexión ya aceptada no falla ni vuelve a sumar XP
     const changed = cn.status === "pending";
     if (changed) {
       await c.query("UPDATE connections SET status = 'accepted', accepted_at = now() WHERE id = $1", [id]);
     }
-    const xp = await awardXp(c, req.user.id, XP_REWARDS.connection, "connection", String(cn.contact_id));
+    const xp = await awardXp(c, req.user.id, XP_REWARDS.connection, "connection", connectionXpRef(cn));
     const { rows: [row] } = await c.query(`${SELECT} WHERE cn.id = $1`, [id]);
     return { row, xp, changed };
   });

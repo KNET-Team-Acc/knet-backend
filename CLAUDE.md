@@ -3,9 +3,9 @@
 API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedor 5432). API en **:4000**. Frontend en `../knet-frontend/knet-frontend` (CORS `http://localhost:5173`). Detalle de endpoints y esquema: `README.md`.
 
 ## Carpetas
-- `db/migrations/` — SQL numerado (`001_init.sql`, `002_user_erasure.sql`, `003_auth.sql`). Nunca edites una migración aplicada: agrega la siguiente (`004_...`).
+- `db/migrations/` — SQL numerado (`001_init.sql`, `002_user_erasure.sql`, `003_auth.sql`, `004_coffees_messages.sql`). Nunca edites una migración aplicada: agrega la siguiente (`005_...`).
 - `db/data/` — copia de `src/data/` del frontend para el seed (si el frontend cambia, recopiar y `db:seed`).
-- `src/` — `app.js`, `config.js`, `db.js` (`query`, `tx`), `middleware/` (`user.js`: Bearer JWT; `X-User-Id`/demo solo en desarrollo), `lib/` (`ai.js`, `auth.js`, `dossier.js`, `events-bus.js`, `consents.js`, `xp.js`, `levels.js`, `serialize.js`, `http.js`), `routes/` (`auth.js` público; `ai.js`; `me/*` = rutas del usuario).
+- `src/` — `app.js`, `config.js`, `db.js` (`query`, `tx`), `middleware/` (`user.js`: Bearer JWT; `X-User-Id`/demo solo en desarrollo), `lib/` (`ai.js`, `auth.js`, `dossier.js`, `events-bus.js`, `consents.js`, `xp.js`, `levels.js`, `serialize.js`, `http.js`, `threads.js`), `routes/` (`auth.js` público; `ai.js`; `me/*` = rutas del usuario).
 
 ## Comandos
 - `npm run dev` (con `--watch`) / `npm start` (sin watch: reiniciar tras cambios)
@@ -26,6 +26,7 @@ API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedo
 - Auth: refresh tokens solo como SHA-256 (`refresh_tokens`); reutilizar uno revocado revoca su familia (`rotateRefreshToken` confirma esa revocación antes de responder 401). Nunca registres tokens ni secretos en logs.
 - Legal: `legal_version < LEGAL_VERSION` (o NULL, salvo demo) → 409 `legal_outdated` en `/api/me/*` menos `consents` y `DELETE /api/me`. Una `aceptacion` con `terminos` y `privacidad` en la versión vigente lo actualiza. `LEGAL_VERSION` debe ser igual a `LEGAL.version` del frontend.
 - Comentarios y mensajes de error en español.
+- Conexiones: `contact_id` (catálogo) o `peer_user_id` (usuario real, dos filas espejo A→B y B→A). Cafés y mensajes pasan siempre por `resolveThread()` (`src/lib/threads.js`): 404 si la conexión no es del usuario, 403 `not_connected` si no está aceptada por ambos lados. XP de café: `awardXp(..., "coffee", "coffee:<id>")` a cada participante con cuenta.
 - IA: solo por `generate()` (`src/lib/ai.js`, SDK `@anthropic-ai/sdk`, `AI_MODEL` = `claude-opus-5-5`). Cualquier fallo → 503 `ai_unavailable` (el frontend tiene fallback). Lo que va al proveedor pasa por `aiProfile()` y respeta `user_scopes`; nunca correo, id ni la key en logs.
 - Tiempo real: publica con `publish(userId, tipo, data)` (`src/lib/events-bus.js`) **después** de confirmar la transacción; tipos en `EVENT_TYPES`. `/api/me/stream` acepta `?access_token=` porque EventSource no envía headers.
 - Despliegue: `Dockerfile` + `docker-entrypoint.sh` (migra al arrancar salvo `RUN_MIGRATIONS=false`); variables en `.env.production.example`. El CI (`.github/workflows/ci.yml`) corre smoke y todos los `test:*`: mantenlos verdes.
