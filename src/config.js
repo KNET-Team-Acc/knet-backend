@@ -1,9 +1,43 @@
 import "dotenv/config";
 
+const nodeEnv = process.env.NODE_ENV || "development";
+const list = (v, def) => (v || def).split(",").map((s) => s.trim()).filter(Boolean);
+
+/** "15m", "30d", "3600s" o milisegundos → milisegundos (def si el valor no es válido) */
+export function durationMs(v, def) {
+  const m = /^(\d+)\s*(ms|s|m|h|d)?$/.exec(String(v ?? "").trim());
+  if (!m) return def === undefined ? NaN : durationMs(def);
+  const unit = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 }[m[2] || "ms"];
+  return Number(m[1]) * unit;
+}
+
+const DEV_SECRET = "knet-dev-secret-no-usar-en-produccion";
+const jwtSecret = process.env.JWT_SECRET || (nodeEnv === "production" ? "" : DEV_SECRET);
+if (!jwtSecret) throw new Error("Falta JWT_SECRET: es obligatorio con NODE_ENV=production");
+
 export const config = {
   port: Number(process.env.PORT || 4000),
-  nodeEnv: process.env.NODE_ENV || "development",
+  nodeEnv,
+  // Solo en desarrollo se acepta X-User-Id y el usuario demo sin token
+  devIdentity: nodeEnv === "development",
   databaseUrl: process.env.DATABASE_URL || "postgres://knet:knet@localhost:5433/knet",
-  corsOrigin: (process.env.CORS_ORIGIN || "http://localhost:5173").split(",").map((s) => s.trim()).filter(Boolean),
+  corsOrigin: list(process.env.CORS_ORIGIN, "http://localhost:5173"),
   demoUserEmail: process.env.DEMO_USER_EMAIL || "demo.tech@knet.local",
+  // Proxies delante de la API (p. ej. 1 detrás del balanceador de la plataforma): el rate limit usa la IP real
+  trustProxy: Number(process.env.TRUST_PROXY || 0),
+
+  // Autenticación
+  jwtSecret,
+  jwtTtlMs: durationMs(process.env.JWT_TTL, "15m"),
+  refreshTtlMs: durationMs(process.env.REFRESH_TTL, "30d"),
+  authRateLimit: Number(process.env.AUTH_RATE_LIMIT || 20), // intentos por IP cada 15 min en /login y /register
+  // Versión vigente de Términos y Política: debe coincidir con LEGAL.version del frontend
+  legalVersion: process.env.LEGAL_VERSION || "1.2",
+
+  // LinkedIn (OpenID Connect). Sin client id/secret, /api/auth/linkedin responde 503.
+  linkedin: {
+    clientId: process.env.LINKEDIN_CLIENT_ID || "",
+    clientSecret: process.env.LINKEDIN_CLIENT_SECRET || "",
+    redirectUri: process.env.LINKEDIN_REDIRECT_URI || "http://localhost:4000/api/auth/linkedin/callback",
+  },
 };

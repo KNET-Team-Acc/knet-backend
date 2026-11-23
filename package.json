@@ -10,12 +10,16 @@
     "db:migrate": "node db/migrate.js",
     "db:seed": "node db/seed.js",
     "db:reset": "node db/migrate.js --reset && node db/seed.js",
-    "smoke": "node scripts/smoke.js"
+    "smoke": "node scripts/smoke.js",
+    "test:linkedin": "node scripts/linkedin-mock.js"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^5.1.0",
+    "express-rate-limit": "^8.7.5",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.13.1",
     "zod": "^4.6.7"
   },
