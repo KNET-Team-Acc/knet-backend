@@ -111,10 +111,11 @@ router.patch("/", async (req, res) => {
 // DELETE /api/me → suprime el perfil y el progreso del titular (derecho de supresión, Ley 1581).
 // Las tablas de progreso se borran por ON DELETE CASCADE. El registro de consentimientos se conserva
 // como prueba (ON DELETE SET NULL deja user_id = NULL; subject_id mantiene verificable la cadena) y
-// recibe un último evento «supresion» con lo que se borró. Exige X-User-Id explícito para no borrar
-// por accidente el usuario por defecto, y las cuentas demo (compartidas) no se pueden borrar.
+// recibe un último evento «supresion» con lo que se borró. Exige identificarse explícitamente (Bearer o,
+// en desarrollo, X-User-Id) para no borrar por accidente el usuario por defecto; las cuentas demo
+// (compartidas) no se pueden borrar. Las sesiones (refresh_tokens) caen por ON DELETE CASCADE.
 router.delete("/", async (req, res) => {
-  if (!req.get("x-user-id")) throw new HttpError(400, "Para borrar una cuenta envía su X-User-Id");
+  if (req.authVia !== "jwt" && req.authVia !== "header") throw new HttpError(400, "Para borrar una cuenta inicia sesión (o envía su X-User-Id en desarrollo)");
   if (req.user.is_demo) throw new HttpError(403, "Las cuentas demo son compartidas y no se pueden borrar", "demo_account");
 
   const result = await tx(async (c) => {
@@ -127,7 +128,8 @@ router.delete("/", async (req, res) => {
               (SELECT count(*) FROM mission_progress WHERE user_id = $1)::int AS missions,
               (SELECT count(*) FROM xp_ledger WHERE user_id = $1)::int AS "xpEntries",
               (SELECT count(*) FROM connections WHERE user_id = $1)::int AS connections,
-              (SELECT count(*) FROM dossiers WHERE user_id = $1)::int AS dossiers`, [u.id]);
+              (SELECT count(*) FROM dossiers WHERE user_id = $1)::int AS dossiers,
+              (SELECT count(*) FROM refresh_tokens WHERE user_id = $1)::int AS "refreshTokens"`, [u.id]);
     await appendConsent(c, u.id, "supresion", { details: { motivo: "Solicitud del titular (DELETE /api/me)", borrado: { profile: 1, ...deleted } } }, clientInfo(req));
     await c.query("DELETE FROM users WHERE id = $1", [u.id]);
     const { rows: [kept] } = await c.query("SELECT count(*)::int AS n FROM consents WHERE subject_id = $1", [u.id]);

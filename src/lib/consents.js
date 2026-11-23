@@ -1,6 +1,9 @@
 import { createHash } from "node:crypto";
 
-export const CONSENT_TYPES = ["aceptacion", "autorizacion_linkedin", "vinculacion", "revocacion", "cambio_permiso", "almacenamiento", "supresion"];
+/** Documentos cuya aceptación exige la versión legal vigente (ids de DOCS en el frontend) */
+export const LEGAL_DOCS = ["terminos", "privacidad"];
+
+export const CONSENT_TYPES =["aceptacion", "autorizacion_linkedin", "vinculacion", "revocacion", "cambio_permiso", "almacenamiento", "supresion"];
 
 /** JSON con claves ordenadas: el hash no depende del orden en que jsonb devuelva las claves. */
 export function stableStringify(v) {
