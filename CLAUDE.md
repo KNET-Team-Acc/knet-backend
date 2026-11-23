@@ -5,7 +5,7 @@ API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedo
 ## Carpetas
 - `db/migrations/` — SQL numerado (`001_init.sql`, `002_user_erasure.sql`, `003_auth.sql`). Nunca edites una migración aplicada: agrega la siguiente (`004_...`).
 - `db/data/` — copia de `src/data/` del frontend para el seed (si el frontend cambia, recopiar y `db:seed`).
-- `src/` — `app.js`, `config.js`, `db.js` (`query`, `tx`), `middleware/` (`user.js`: Bearer JWT; `X-User-Id`/demo solo en desarrollo), `lib/` (`ai.js`, `auth.js`, `dossier.js`, `consents.js`, `xp.js`, `levels.js`, `serialize.js`, `http.js`), `routes/` (`auth.js` público; `ai.js`; `me/*` = rutas del usuario).
+- `src/` — `app.js`, `config.js`, `db.js` (`query`, `tx`), `middleware/` (`user.js`: Bearer JWT; `X-User-Id`/demo solo en desarrollo), `lib/` (`ai.js`, `auth.js`, `dossier.js`, `events-bus.js`, `consents.js`, `xp.js`, `levels.js`, `serialize.js`, `http.js`), `routes/` (`auth.js` público; `ai.js`; `me/*` = rutas del usuario).
 
 ## Comandos
 - `npm run dev` (con `--watch`) / `npm start` (sin watch: reiniciar tras cambios)
@@ -14,6 +14,7 @@ API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedo
 - `npm run db:reset` — borra el esquema y reseedea (solo desarrollo)
 - `npm run smoke` — prueba la API en marcha (`API_URL` para otro puerto). Deja usuarios borrados con consentimientos desvinculados: es a propósito.
 - `npm run test:ai` — `/api/ai/*` con el proveedor simulado (no gasta tokens; solo necesita la BD).
+- `npm run test:stream` — SSE de `/api/me/stream` (solo necesita la BD; `EVENTS_PG_NOTIFY=true` prueba LISTEN/NOTIFY).
 - `npm run test:linkedin` — flujo OAuth de LinkedIn con los endpoints de LinkedIn simulados (solo necesita la BD).
 
 ## Reglas
@@ -26,3 +27,5 @@ API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedo
 - Legal: `legal_version < LEGAL_VERSION` (o NULL, salvo demo) → 409 `legal_outdated` en `/api/me/*` menos `consents` y `DELETE /api/me`. Una `aceptacion` con `terminos` y `privacidad` en la versión vigente lo actualiza. `LEGAL_VERSION` debe ser igual a `LEGAL.version` del frontend.
 - Comentarios y mensajes de error en español.
 - IA: solo por `generate()` (`src/lib/ai.js`, SDK `@anthropic-ai/sdk`, `AI_MODEL` = `claude-opus-5-5`). Cualquier fallo → 503 `ai_unavailable` (el frontend tiene fallback). Lo que va al proveedor pasa por `aiProfile()` y respeta `user_scopes`; nunca correo, id ni la key en logs.
+- Tiempo real: publica con `publish(userId, tipo, data)` (`src/lib/events-bus.js`) **después** de confirmar la transacción; tipos en `EVENT_TYPES`. `/api/me/stream` acepta `?access_token=` porque EventSource no envía headers.
+- Despliegue: `Dockerfile` + `docker-entrypoint.sh` (migra al arrancar salvo `RUN_MIGRATIONS=false`); variables en `.env.production.example`. El CI (`.github/workflows/ci.yml`) corre smoke y todos los `test:*`: mantenlos verdes.
