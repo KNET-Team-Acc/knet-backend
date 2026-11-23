@@ -34,6 +34,14 @@ export const config = {
   // Versión vigente de Términos y Política: debe coincidir con LEGAL.version del frontend
   legalVersion: process.env.LEGAL_VERSION || "1.2",
 
+  // IA (Claude). Sin AI_API_KEY, /api/ai/* responde 503 ai_unavailable y el frontend usa sus respuestas locales.
+  ai: {
+    apiKey: process.env.AI_API_KEY || "",
+    model: process.env.AI_MODEL || "claude-opus-5-5",
+    timeoutMs: durationMs(process.env.AI_TIMEOUT_MS, "20000"),
+    rateLimit: Number(process.env.AI_RATE_LIMIT || 10), // peticiones por usuario y por minuto
+  },
+
   // LinkedIn (OpenID Connect). Sin client id/secret, /api/auth/linkedin responde 503.
   linkedin: {
     clientId: process.env.LINKEDIN_CLIENT_ID || "",
