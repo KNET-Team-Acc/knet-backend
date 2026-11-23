@@ -125,14 +125,41 @@ const noMsg = await check("mensaje con conexión pendiente → 403", "POST", `/a
 if (noCafe?.error !== "not_connected" || noMsg?.error !== "not_connected") { failed++; console.log("    ✗ debería ser not_connected"); }
 await check("quitar solicitud pendiente", "DELETE", `/api/me/connections/${pend.connection.id}`, undefined, [204]);
 
-// Entre usuarios reales: dos filas espejo. Mientras no exista el escaneo de QR, la pareja se crea por SQL.
+// Entre usuarios reales: dos filas espejo, creadas al escanear el QR dinámico del otro.
 const LEGAL_V = process.env.LEGAL_VERSION || "1.2";
 const realUser = async (name) => (await sql(
   `INSERT INTO users (email, name, industry, role, company, legal_version) VALUES ($1, $2, 'tech', 'CTO', 'Acme', $3) RETURNING id`,
   [`smoke.${name.toLowerCase()}.${Date.now()}@knet.local`, `Smoke ${name}`, LEGAL_V])).rows[0].id;
 const ana = await realUser("Ana"), beto = await realUser("Beto"), caro = await realUser("Caro");
-await sql(`INSERT INTO connections (user_id, peer_user_id, status, source, accepted_at)
-           VALUES ($1, $2, 'accepted', 'qr', now()), ($2, $1, 'accepted', 'qr', now())`, [ana, beto]);
+// QR dinámico: Beto muestra su código y Ana lo escanea
+userId = beto;
+const qrB = await check("token QR de Beto", "GET", "/api/me/qr-token?eventId=bog");
+if (!/^knet1\.[\w-]+\.[\w-]+$/.test(qrB?.token ?? "") || !(qrB?.refreshIn < qrB?.ttl)) { failed++; console.log("    ✗ el token debería ser knet1.<payload>.<firma> con refreshIn < ttl"); }
+const ownQr = await check("Beto escanea su propio QR", "POST", "/api/me/connections/scan", { token: qrB.token }, [400]);
+userId = ana;
+const [head, payload] = qrB.token.split(".");
+const forged = `${head}.${Buffer.from(JSON.stringify({ ...JSON.parse(Buffer.from(payload, "base64url")), u: caro })).toString("base64url")}.${qrB.token.split(".")[2]}`;
+const bad = await check("token alterado", "POST", "/api/me/connections/scan", { token: forged }, [400]);
+const { signQrToken } = await import("../src/lib/qr.js");
+const old = await check("token caducado", "POST", "/api/me/connections/scan", { token: signQrToken({ userId: beto }, Date.now() - 600_000).token }, [400]);
+if (ownQr?.error !== "own_qr" || bad?.error !== "invalid_qr" || old?.error !== "qr_expired") { failed++; console.log("    ✗ errores esperados: own_qr, invalid_qr, qr_expired"); }
+const sc = await check("Ana escanea a Beto", "POST", "/api/me/connections/scan", { token: qrB.token, context: "Charla de RAG" }, [201]);
+if (sc?.xpAwarded !== 100 || !sc?.created || sc?.connection?.contact?.userId !== beto || sc?.connection?.eventId !== "bog") {
+  failed++; console.log("    ✗ el escaneo debería crear la conexión con Beto (+100 XP)");
+}
+const used = await check("token ya usado", "POST", "/api/me/connections/scan", { token: qrB.token }, [409]);
+if (used?.error !== "qr_used") { failed++; console.log("    ✗ debería ser qr_used"); }
+userId = beto;
+const qrB2 = await check("nuevo token de Beto", "GET", "/api/me/qr-token");
+userId = ana;
+const sc2 = await check("escanear de nuevo a Beto", "POST", "/api/me/connections/scan", { token: qrB2.token }, [200]);
+const { rows: [{ xp: betoXp }] } = await sql("SELECT xp FROM users WHERE id = $1", [beto]);
+if (sc2?.created !== false || sc2?.xpAwarded !== 0 || betoXp !== 100) { failed++; console.log("    ✗ reescanear no debería sumar XP; Beto debería tener 100"); }
+userId = caro;
+let scanLimited = false;
+for (let i = 0; i < 40 && !scanLimited; i++) scanLimited = (await call("POST", "/api/me/connections/scan", { token: "knet1.x.y" })).status === 429;
+console.log(`${scanLimited ? "✓" : "✗"} 429 POST   /api/me/connections/scan  rate limit por usuario`);
+if (!scanLimited) failed++;
 userId = ana;
 const anaConn = (await check("conexiones de Ana", "GET", "/api/me/connections")).connections.find((c) => c.contact.userId === beto);
 userId = beto;
@@ -171,8 +198,35 @@ if (inv?.role !== "invitee" || inv?.connectionId !== betoConn.id || inv?.with?.n
 const a1 = await check("Beto acepta el café", "PATCH", `/api/me/coffees/${c1.coffee.id}`, { status: "accepted" });
 const a2 = await check("Beto acepta otra vez", "PATCH", `/api/me/coffees/${c1.coffee.id}`, { status: "accepted" });
 const { rows: [{ xp: anaXp }] } = await sql("SELECT xp FROM users WHERE id = $1", [ana]);
-if (a1?.xpAwarded !== 50 || a2?.xpAwarded !== 0 || anaXp !== 50) { failed++; console.log("    ✗ aceptar debería dar 50 XP a cada uno, una sola vez"); }
+if (a1?.xpAwarded !== 50 || a2?.xpAwarded !== 0 || anaXp !== 150) { failed++; console.log("    ✗ aceptar debería dar 50 XP a cada uno, una sola vez (Ana: 100 del QR + 50)"); }
+
+// Check-in NFC desde un tótem (X-Totem-Key)
+const TOTEM = process.env.TOTEM_SECRET || "knet-dev-totem";
+async function totem(path, body, key = TOTEM) {
+  const res = await fetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json", ...(key ? { "X-Totem-Key": key } : {}), "X-Totem-Id": "smoke-1" }, body: JSON.stringify(body) });
+  const json = await res.json().catch(() => null);
+  return { status: res.status, json };
+}
+async function totemCheck(label, path, body, ok, key) {
+  const r = await totem(path, body, key);
+  const pass = ok.includes(r.status);
+  if (!pass) { failed++; console.log("    ", JSON.stringify(r.json)); }
+  console.log(`${pass ? "✓" : "✗"} ${String(r.status).padEnd(3)} POST   ${path}  ${label}`);
+  return r.json;
+}
 userId = ana;
+await check("Ana se inscribe en bog", "POST", "/api/me/registrations/bog", undefined, [200, 201]);
+await totemCheck("NFC sin credencial de tótem", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [401], null);
+await totemCheck("NFC con credencial inválida", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [401], "no-es-la-clave");
+const nfc1 = await totemCheck("NFC con la credencial (UUID)", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [201]);
+if (nfc1?.checkin?.method !== "nfc" || nfc1?.xpAwarded !== 40) { failed++; console.log("    ✗ el check-in NFC debería quedar con method nfc y +40 XP"); }
+await totemCheck("NFC repetido", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [409]);
+const qrA = await check("token QR de Ana", "GET", "/api/me/qr-token?eventId=bog");
+await totemCheck("NFC con el teléfono (token)", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:2", token: qrA.token }, [201]);
+await totemCheck("NFC con token ya usado", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:3", token: qrA.token }, [409]);
+await totemCheck("NFC con sesión de otro evento", "/api/events/bog/nfc-checkin", { sessionCode: "med:0:1", userId: ana }, [404]);
+const nfcList = await check("check-ins de Ana", "GET", "/api/me/checkins?eventId=bog");
+if (nfcList?.checkins?.filter((k) => k.method === "nfc").length !== 2) { failed++; console.log("    ✗ deberían aparecer 2 check-ins NFC"); }
 const delAna = await check("Ana borra su cuenta", "DELETE", "/api/me");
 console.log(`    borrado: cafés ${delAna?.deleted?.coffees} · mensajes ${delAna?.deleted?.messages}`);
 const { rows: [left] } = await sql(

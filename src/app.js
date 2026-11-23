@@ -10,19 +10,21 @@ import contactsRouter from "./routes/contacts.js";
 import eventsRouter from "./routes/events.js";
 import healthRouter from "./routes/health.js";
 import meRouter from "./routes/me/index.js";
+import totemRouter from "./routes/totem.js";
 import { streamAuthFromQuery } from "./routes/me/stream.js";
 
 export function createApp() {
   const app = express();
   app.disable("x-powered-by");
   if (config.trustProxy) app.set("trust proxy", config.trustProxy);
-  app.use(cors({ origin: config.corsOrigin, allowedHeaders: ["Content-Type", "Authorization", "X-User-Id"] }));
+  app.use(cors({ origin: config.corsOrigin, allowedHeaders: ["Content-Type", "Authorization", "X-User-Id", "X-Totem-Key", "X-Totem-Id"] }));
   app.use(express.json({ limit: "100kb" }));
 
   app.use(healthRouter);
 
   const api = express.Router();
   api.use("/auth", authRouter);                                  // público
+  api.use("/events", totemRouter);                              // tótems NFC: X-Totem-Key, sin usuario
   api.use("/events", resolveUser({ optional: true }), eventsRouter); // catálogo: con o sin sesión
   api.use("/contacts", resolveUser({ optional: true }), contactsRouter);
   api.use("/me/stream", streamAuthFromQuery);                   // EventSource: token por query

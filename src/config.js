@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import "dotenv/config";
 
 const nodeEnv = process.env.NODE_ENV || "development";
@@ -14,6 +15,8 @@ export function durationMs(v, def) {
 const DEV_SECRET = "knet-dev-secret-no-usar-en-produccion";
 const jwtSecret = process.env.JWT_SECRET || (nodeEnv === "production" ? "" : DEV_SECRET);
 if (!jwtSecret) throw new Error("Falta JWT_SECRET: es obligatorio con NODE_ENV=production");
+// Sin QR_SECRET se deriva uno de JWT_SECRET (así un despliegue existente no deja de arrancar)
+const qrSecret = process.env.QR_SECRET || createHmac("sha256", jwtSecret).update("knet-qr").digest("base64url");
 
 export const config = {
   port: Number(process.env.PORT || 4000),
@@ -46,6 +49,15 @@ export const config = {
     model: process.env.AI_MODEL || "claude-opus-5-5",
     timeoutMs: durationMs(process.env.AI_TIMEOUT_MS, "20000"),
     rateLimit: Number(process.env.AI_RATE_LIMIT || 10), // peticiones por usuario y por minuto
+  },
+
+  // QR dinámico entre asistentes y check-in NFC desde tótems
+  qr: {
+    secret: qrSecret,
+    ttlS: Math.min(Math.max(Number(process.env.QR_TTL_S || 45), 10), 300), // vida del token (s)
+    scanRateLimit: Number(process.env.QR_SCAN_RATE_LIMIT || 30),           // escaneos por usuario y minuto
+    // Sin TOTEM_SECRET, POST /api/events/:id/nfc-checkin responde 503 (en desarrollo hay uno por defecto)
+    totemSecret: process.env.TOTEM_SECRET || (nodeEnv === "development" ? "knet-dev-totem" : ""),
   },
 
   // LinkedIn (OpenID Connect). Sin client id/secret, /api/auth/linkedin responde 503.
