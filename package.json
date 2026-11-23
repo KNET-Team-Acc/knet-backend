@@ -11,9 +11,11 @@
     "db:seed": "node db/seed.js",
     "db:reset": "node db/migrate.js --reset && node db/seed.js",
     "smoke": "node scripts/smoke.js",
-    "test:linkedin": "node scripts/linkedin-mock.js"
+    "test:linkedin": "node scripts/linkedin-mock.js",
+    "test:ai": "node scripts/ai-mock.js"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.12.0",
     "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
