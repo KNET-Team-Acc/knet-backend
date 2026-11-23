@@ -1,0 +1,13 @@
+node_modules
+npm-debug.log
+.env
+.env.*
+!.env.example
+.git
+.github
+.vscode
+.idea
+scripts
+docker-compose.yml
+*.md
+!README.md
