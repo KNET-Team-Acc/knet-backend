@@ -34,6 +34,7 @@ npm run smoke
 | `npm run db:seed` | Carga `db/data/` en la base de datos. Se puede repetir |
 | `npm run db:reset` | **Borra todo** y vuelve a migrar y a cargar el seed (solo desarrollo) |
 | `npm run smoke` | Prueba todos los endpoints contra la API en marcha (incluye registro, login, refresh y legal) |
+| `npm run test:ai` | Prueba `/api/ai/*` con respuestas simuladas del proveedor (no gasta tokens ni necesita la API en marcha) |
 | `npm run test:linkedin` | Prueba el flujo OAuth de LinkedIn simulando sus endpoints (no necesita la API en marcha) |
 
 PostgreSQL usa el puerto **5433** del host para no chocar con una instalación local en el 5432.
@@ -83,6 +84,9 @@ Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "
 | POST | `/api/me/connections` | `{ contactId \| name, source?: "request"\|"match"\|"qr", context?, eventId? }`. Por QR queda aceptada y suma +100 XP |
 | PATCH | `/api/me/connections/:id` | `{ status: "accepted" }`: acepta una solicitud pendiente y suma +100 XP (una sola vez por contacto; repetirlo no falla) |
 | DELETE | `/api/me/connections/:id` | Quita la conexión. La XP ya ganada se conserva |
+| POST | `/api/ai/chat` | AI Concierge. `{ message, history?, eventId?, day?, lang? }` → `{ reply, sources }`. RAG ligero: sesiones del día (variante de la industria) y speakers reales del evento van en el prompt; `sources` lista las sesiones citadas |
+| POST | `/api/ai/simulate` | Simulador de networking. `{ contactId | contactName, message, history?, lang? }` → `{ reply }` en la voz del contacto |
+| POST | `/api/ai/dossier` | `{ eventId, lang? }` → `{ dossier }` (mismo contrato que `/api/me/dossiers/:eventId`, con `content.generatedBy: "ai"` y `content.paraTi`). Usa check-ins, conexiones y `xp_ledger` reales |
 | GET | `/api/me/dossiers` | Todos mis dossiers |
 | GET / POST | `/api/me/dossiers/:eventId` | Lee o genera el dossier del evento. `POST { ideas?, plan?, notes? }`; el resumen de sesiones, contactos y XP lo calcula el servidor |
 
@@ -92,6 +96,14 @@ Ejemplo:
 curl http://localhost:4000/api/events/bog/sessions?day=0
 curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application/json" -d '{"sessionCode":"bog:0:0"}'
 ```
+
+## IA (Claude)
+
+- `src/lib/ai.js` usa el SDK oficial `@anthropic-ai/sdk` con `AI_MODEL` (por defecto `claude-opus-5-5`), un solo reintento y `AI_TIMEOUT_MS` por intento. Activa el *server-side fallback* de Anthropic (`fallbacks: "default"`): si el modelo declina por seguridad, la API reintenta con un modelo de respaldo en la misma llamada.
+- Sin `AI_API_KEY`, con el proveedor caído, un timeout o un rechazo, los tres endpoints responden `503 { error: "ai_unavailable" }` y el frontend usa su contenido local. El resto de la API no se ve afectado.
+- Rate limit por usuario: `AI_RATE_LIMIT` peticiones por minuto → 429 `rate_limited`. Exigen sesión y la versión legal vigente (409 `legal_outdated`).
+- **Privacidad:** al proveedor solo va lo que cubren los permisos del usuario (`aiProfile()` en `src/lib/queries.js`): nombre de pila y cargo; industria, seniority y empresa con `industry`; intereses con `interests`; las conexiones del dossier con `network`. Nunca correo, id ni foto. La key no aparece en logs ni respuestas.
+- `history` admite como máximo 12 turnos de hasta 2000 caracteres; `message`, 1000 (600 en el simulador).
 
 ## Modelo de datos
 
@@ -118,6 +130,7 @@ Notas:
 
 - Verificación de correo y recuperación de contraseña para las cuentas con contraseña.
 - Importar cargo y empresa de LinkedIn (requiere productos de LinkedIn fuera de OpenID Connect).
+- Usar la agenda personalizada del servidor en el RAG del Concierge cuando exista (#4).
 - Pasar a la base de datos los DMs, el chat del Concierge, las notificaciones y las recompensas del avatar.
 - Endpoint de administración para que el Responsable consulte y exporte el registro de consentimientos de todos los usuarios (hoy `GET /api/me/consents` solo devuelve el del usuario actual).
 - Purgar los consentimientos desvinculados cuando vence el periodo de retención (hoy el trigger impide borrarlos; haría falta un proceso controlado).
