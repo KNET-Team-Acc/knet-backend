@@ -19,26 +19,26 @@ const listQuery = z.object({
   industry: z.string().max(40).optional(),
 });
 
-// GET /api/events?kind=real&industry=tech
+// GET /api/events?kind=real&industry=tech  (sin sesión: sin «registered» ni «locked» personalizados)
 router.get("/", async (req, res) => {
   const { kind, industry } = listQuery.parse(req.query);
   const { rows } = await query(
     `${EVENT_SELECT}
       WHERE ($2::text IS NULL OR e.kind = $2) AND ($3::text IS NULL OR $3 = ANY (e.industries))
       ORDER BY d.days[1] NULLS LAST, e.id`,
-    [req.user.id, kind ?? null, industry ?? null],
+    [req.user?.id ?? null, kind ?? null, industry ?? null],
   );
-  res.json({ events: rows.map((e) => toEvent(e, req.user.xp)) });
+  res.json({ events: rows.map((e) => toEvent(e, req.user?.xp)) });
 });
 
 // GET /api/events/:id → detalle con ficha, recinto y speakers
 router.get("/:id", async (req, res) => {
-  const { rows: [ev] } = await query(`${EVENT_SELECT} WHERE e.id = $2`, [req.user.id, req.params.id]);
+  const { rows: [ev] } = await query(`${EVENT_SELECT} WHERE e.id = $2`, [req.user?.id ?? null, req.params.id]);
   if (!ev) throw new HttpError(404, `No existe el evento ${req.params.id}`);
   const { rows: speakers } = await query(
     `SELECT name, role, org, session_label AS "session", talk, bio, tags, avatar
        FROM speakers WHERE event_id = $1 ORDER BY id`, [ev.id]);
-  res.json({ event: { ...toEvent(ev, req.user.xp), info: ev.info, venue: ev.venue, speakers } });
+  res.json({ event: { ...toEvent(ev, req.user?.xp), info: ev.info, venue: ev.venue, speakers } });
 });
 
 // GET /api/events/:id/sessions?day=0 → sesiones del día (variante de la industria del usuario)
@@ -49,7 +49,7 @@ router.get("/:id/sessions", async (req, res) => {
       WHERE e.id = $1 GROUP BY e.id`, [req.params.id]);
   if (!ev) throw new HttpError(404, `No existe el evento ${req.params.id}`);
   if (day >= ev.days) throw new HttpError(404, `El evento ${ev.id} tiene ${ev.days} día(s); day va de 0 a ${ev.days - 1}`);
-  const sessions = await listSessions(pool, ev.id, day, req.user.industry, req.user.id);
+  const sessions = await listSessions(pool, ev.id, day, req.user?.industry ?? null, req.user?.id ?? null);
   res.json({ eventId: ev.id, day, sessions });
 });
 
