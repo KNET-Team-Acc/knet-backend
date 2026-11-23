@@ -8,12 +8,14 @@ import "dotenv/config";
 
 const BASE = process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`;
 let userId = null;
+let token = null; // access token: si está, se envía Authorization: Bearer en lugar de X-User-Id
 let failed = 0;
 
 async function call(method, path, body) {
+  const auth = token ? { Authorization: `Bearer ${token}` } : userId ? { "X-User-Id": userId } : {};
   const res = await fetch(BASE + path, {
     method,
-    headers: { "Content-Type": "application/json", ...(userId ? { "X-User-Id": userId } : {}) },
+    headers: { "Content-Type": "application/json", ...auth },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const text = await res.text();
@@ -113,7 +115,12 @@ const { rows: [tmp] } = await sql(
   `INSERT INTO users (email, name, industry) VALUES ($1, 'Smoke Borrado', 'energia') RETURNING id`,
   [`smoke.borrado.${Date.now()}@knet.local`]);
 userId = tmp.id;
-await check("consentimiento del usuario a borrar", "POST", "/api/me/consents", { type: "aceptacion", documents: [{ id: "privacidad", version: "1.2" }] }, [201]);
+// Sin versión legal aceptada: /api/me/* responde 409 legal_outdated hasta registrar la aceptación
+const out = await check("sin aceptación legal → 409", "GET", "/api/me", undefined, [409]);
+if (out?.error !== "legal_outdated" || !out?.required) { failed++; console.log("    ✗ debería ser legal_outdated con required"); }
+const acc = await check("consentimiento del usuario a borrar", "POST", "/api/me/consents",
+  { type: "aceptacion", documents: [{ id: "terminos", version: "1.2" }, { id: "privacidad", version: "1.2" }] }, [201]);
+if (acc?.legalVersion !== "1.2") { failed++; console.log("    ✗ la aceptación debería fijar legalVersion 1.2"); }
 await check("inscripción del usuario a borrar", "POST", "/api/me/registrations/bog", undefined, [200, 201]);
 await check("cliente no puede registrar «supresion»", "POST", "/api/me/consents", { type: "supresion" }, [400]);
 const del = await check("borrar mi cuenta", "DELETE", "/api/me");
@@ -132,6 +139,48 @@ try { await sql("UPDATE consents SET payload = '{}'::jsonb WHERE id = $1", [kept
 console.log(`    modificar un consentimiento conservado: ${blocked ? "bloqueado" : "PERMITIDO"}`);
 if (!blocked) failed++;
 userId = demoId;
+
+// ───── Autenticación: registro → login → /api/me con Bearer → refresh rotatorio → logout ─────
+userId = null;
+const mail = `smoke.auth.${Date.now()}@knet.local`;
+const LEGAL = process.env.LEGAL_VERSION || "1.2";
+await check("registro sin aceptar lo legal", "POST", "/api/auth/register", { email: mail, password: "clave-segura-1", name: "Smoke Auth", legalVersion: LEGAL }, [400]);
+await check("registro con versión legal vieja", "POST", "/api/auth/register", { email: mail, password: "clave-segura-1", name: "Smoke Auth", acceptLegal: true, legalVersion: "0.1" }, [409]);
+const reg = await check("registro", "POST", "/api/auth/register",
+  { email: mail, password: "clave-segura-1", name: "Smoke Auth", industry: "banca", acceptLegal: true, legalVersion: LEGAL }, [201]);
+if (!reg?.accessToken || !reg?.refreshToken || reg?.consent?.type !== "aceptacion") { failed++; console.log("    ✗ el registro debe devolver tokens y la aceptación"); }
+await check("correo repetido", "POST", "/api/auth/register",
+  { email: mail.toUpperCase(), password: "clave-segura-1", name: "Otro", acceptLegal: true, legalVersion: LEGAL }, [409]);
+await check("contraseña incorrecta", "POST", "/api/auth/login", { email: mail, password: "no-es-esta" }, [401]);
+await check("demo sin contraseña", "POST", "/api/auth/login", { email: "demo.tech@knet.local", password: "cualquiera" }, [401]);
+const login = await check("login", "POST", "/api/auth/login", { email: mail, password: "clave-segura-1" });
+token = login.accessToken;
+const meAuth = await check("GET /api/me con Bearer", "GET", "/api/me");
+if (meAuth?.user?.email !== mail || meAuth?.user?.industry !== "banca") { failed++; console.log("    ✗ /api/me debería ser la cuenta registrada"); }
+token = "no.es.un.jwt";
+await check("Bearer inválido", "GET", "/api/me", undefined, [401]);
+token = null;
+const ref1 = await check("refresh", "POST", "/api/auth/refresh", { refreshToken: login.refreshToken });
+await check("refresh reutilizado → 401", "POST", "/api/auth/refresh", { refreshToken: login.refreshToken }, [401]);
+await check("la familia queda revocada", "POST", "/api/auth/refresh", { refreshToken: ref1.refreshToken }, [401]);
+await check("logout", "POST", "/api/auth/logout", { refreshToken: reg.refreshToken }, [204]);
+await check("refresh tras logout → 401", "POST", "/api/auth/refresh", { refreshToken: reg.refreshToken }, [401]);
+// Versión legal antigua: 409 hasta re-aceptar por POST /api/me/consents (que no se bloquea)
+const login2 = await check("login otra vez", "POST", "/api/auth/login", { email: mail, password: "clave-segura-1" });
+token = login2.accessToken;
+await sql("UPDATE users SET legal_version = '0.9' WHERE lower(email) = $1", [mail]);
+await check("versión legal antigua → 409", "GET", "/api/me/missions", undefined, [409]);
+await check("re-aceptar", "POST", "/api/me/consents", { type: "aceptacion", documents: [{ id: "terminos", version: LEGAL }, { id: "privacidad", version: LEGAL }] }, [201]);
+await check("acceso tras re-aceptar", "GET", "/api/me/missions");
+const delAuth = await check("borrar cuenta con Bearer", "DELETE", "/api/me");
+if (!(delAuth?.deleted?.refreshTokens >= 2)) { failed++; console.log("    ✗ el borrado debería incluir los refresh tokens"); }
+const { rows: [{ n: leftTokens }] } = await sql(
+  "SELECT count(*)::int AS n FROM refresh_tokens WHERE user_id NOT IN (SELECT id FROM users)");
+if (leftTokens !== 0) { failed++; console.log("    ✗ quedaron refresh tokens huérfanos"); }
+await check("token de cuenta borrada", "GET", "/api/me", undefined, [401]);
+token = null;
+const prov = await check("proveedores de acceso", "GET", "/api/auth/providers");
+console.log(`    LinkedIn configurado: ${prov?.linkedin} · versión legal: ${prov?.legalVersion}`);
 
 console.log(failed ? `\n${failed} prueba(s) fallaron` : "\nTodas las pruebas pasaron");
 process.exit(failed ? 1 : 0);
