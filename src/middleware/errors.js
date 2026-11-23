@@ -14,7 +14,7 @@ export function errorHandler(err, req, res, _next) {
       issues: err.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
     });
   }
-  if (err instanceof HttpError) return res.status(err.status).json({ error: err.code, message: err.message });
+  if (err instanceof HttpError) return res.status(err.status).json({ ...err.extra, error: err.code, message: err.message });
   if (err.type === "entity.parse.failed") return res.status(400).json({ error: "invalid_json", message: "El cuerpo no es JSON válido" });
   // Errores de PostgreSQL
   if (err.code === "23505") return res.status(409).json({ error: "conflict", message: "El registro ya existe" });
