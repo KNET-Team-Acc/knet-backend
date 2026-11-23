@@ -16,7 +16,8 @@ export async function dossierSummary(db, user, eventId) {
   const checkins = await listCheckins(db, user.id, user.industry, ev.id);
   const { rows: contacts } = await db.query(
     `SELECT COALESCE(ct.name, pu.name) AS name,
-            COALESCE(ct.headline, concat_ws(' · ', NULLIF(pu.role, ''), NULLIF(pu.company, ''))) AS headline, cn.context
+            COALESCE(ct.headline, concat_ws(' · ', NULLIF(pu.role, ''), NULLIF(pu.company, ''))) AS headline, cn.context,
+            (cn.peer_user_id IS NOT NULL) AS "isUser"
        FROM connections cn
        LEFT JOIN contacts ct ON ct.id = cn.contact_id
        LEFT JOIN users pu ON pu.id = cn.peer_user_id
