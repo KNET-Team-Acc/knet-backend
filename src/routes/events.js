@@ -54,6 +54,7 @@ router.get("/:id/sessions", async (req, res) => {
     const { rowCount } = await query("SELECT 1 FROM industries WHERE id = $1", [asked]);
     if (!rowCount) throw new HttpError(400, `No existe la industria ${asked}`);
   }
+  // req.user puede faltar cuando la ruta admite peticiones sin sesión
   const industry = asked ?? req.user?.industry ?? null;
   const { rows: [ev] } = await query(
     `SELECT e.id, count(d.*)::int AS days FROM events e LEFT JOIN event_days d ON d.event_id = e.id
