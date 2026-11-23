@@ -1,0 +1,12 @@
+# Lo que no se sube a Vercel (la API solo necesita api/, src/, db/ y package*.json)
+.env
+.env.*
+!.env.example
+node_modules
+.git
+.github
+scripts
+Dockerfile
+docker-entrypoint.sh
+docker-compose.yml
+*.md
