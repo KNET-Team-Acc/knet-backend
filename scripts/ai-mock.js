@@ -57,7 +57,7 @@ const post = async (path, body) => {
 };
 
 try {
-  const chat = await post("/api/ai/chat", { message: "¿Qué sesión sigue?", eventId: "bog", day: 0, history: [{ role: "assistant", content: "Hola" }, { role: "user", content: "Hola" }, { role: "assistant", content: "¿En qué te ayudo?" }] });
+  const chat = await post("/api/ai/chat", { message: "¿Qué sesión sigue?", eventId: "and", day: 0, history: [{ role: "assistant", content: "Hola" }, { role: "user", content: "Hola" }, { role: "assistant", content: "¿En qué te ayudo?" }] });
   ok(chat.status === 200 && chat.json.reply.startsWith("Te recomiendo"), "chat responde con el texto del modelo");
   ok(lastBody.model === "claude-opus-5-5" && lastBody.fallbacks === "default" && (lastHeaders.get("anthropic-beta") || "").includes("server-side-fallback-2026-07-01"), "usa claude-opus-5-5 con server-side fallback");
   ok(/sesionesDelDia/.test(lastBody.system) && chat.json.sources.length === 1, "RAG: el prompt lleva las sesiones reales y la respuesta cita una (sources)");
@@ -68,11 +68,12 @@ try {
   ok(sim.status === 200 && !!sim.json.reply && /Felipe L\./.test(lastBody.system), "simulate interpreta al contacto");
   ok((await post("/api/ai/simulate", { contactName: "Nadie Existe", message: "hola" })).status === 404, "simulate con contacto inexistente → 404");
 
-  const dos = await post("/api/ai/dossier", { eventId: "bog" });
+  const dos = await post("/api/ai/dossier", { eventId: "and" });
   ok([200, 201].includes(dos.status) && dos.json.dossier.content.generatedBy === "ai", "dossier generado por la IA y guardado");
   ok(Array.isArray(dos.json.dossier.content.summary.sessionsAttended) && typeof dos.json.dossier.content.summary.xp === "number", "el dossier guarda el resumen real (check-ins, conexiones, XP)");
   ok(/sesionesConCheckIn/.test(lastBody.messages[0].content) && /porMotivo/.test(lastBody.messages[0].content), "el prompt del dossier usa check-ins y xp_ledger");
-  ok((await post("/api/ai/dossier", { eventId: "and" })).status === 403, "dossier de un evento sin inscripción → 403");
+  await pool.query("DELETE FROM registrations WHERE user_id = $1 AND event_id = 'adc'", [demo.id]); // adc: sin inscripción
+  ok((await post("/api/ai/dossier", { eventId: "adc" })).status === 403, "dossier de un evento sin inscripción → 403");
 
   mode = "refusal";
   const ref = await post("/api/ai/chat", { message: "hola" });

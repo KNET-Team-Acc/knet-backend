@@ -105,7 +105,7 @@ cp .env.example .env          # PowerShell: Copy-Item .env.example .env
 # 3. Base de datos (PostgreSQL en localhost:5433)
 docker compose up -d
 npm run db:migrate            # crea las tablas
-npm run db:seed               # eventos, sesiones, misiones, contactos y usuarios demo
+npm run db:seed:demo          # catálogo real + fixtures de prueba (usuarios demo.*, contactos ficticios)
 
 # 4. API en http://localhost:4000 (se recarga al guardar)
 npm run dev
@@ -121,7 +121,8 @@ npm run smoke
 |---|---|
 | `npm run dev` / `npm start` | Levanta la API (`dev` se recarga al guardar). |
 | `npm run db:migrate` | Aplica las migraciones de `db/migrations/` que falten. |
-| `npm run db:seed` | Carga `db/data/` en la base. Solo hace upserts: se puede repetir. |
+| `npm run db:seed` | Carga el catálogo real de `db/data/` (los 4 eventos con fuente oficial). Idempotente: hace upserts, retira los eventos que ya no están en `EVENTS` (antes mueve inscripciones, check-ins, dossiers, conexiones y cafés a su sucesor de `EV_ALIAS`, p. ej. `bog` → `and`) y quita los contactos ficticios. Es el que corre en producción. |
+| `npm run db:seed:demo` | Lo mismo más los fixtures de prueba de `db/fixtures/demo.js`: usuarios `demo.<industria>@knet.local`, matches ficticios y asistentes simulados del QR. Lo usan `smoke`, `test:ai` y `test:stream` (CI). |
 | `npm run db:reset` | **Borra todo** y vuelve a migrar y a cargar el seed (bloqueado con `NODE_ENV=production`). |
 | `npm run smoke` | Prueba todos los endpoints contra la API en marcha: cuentas, refresh, legal, misiones, red, QR, cafés, chat, supresión… |
 | `npm run test:ai` | Prueba `/api/ai/*` con el proveedor simulado (no gasta tokens ni necesita la API en marcha). |
@@ -129,7 +130,7 @@ npm run smoke
 | `npm run test:stream` | Prueba el SSE de `/api/me/stream`: eventos, heartbeat y reanudación. Con `EVENTS_PG_NOTIFY=true`, LISTEN/NOTIFY. |
 | `npm run parity` | Compara la agenda con `sessionsFor()` del frontend (`FRONTEND_DIR`, `../knet-frontend` por defecto) y, con la API en marcha, también su respuesta. |
 
-Al terminar, `npm run db:seed` muestra los UUID de los 4 usuarios demo (`demo.banca`, `demo.tech`, `demo.consultoria`, `demo.energia`). No tienen contraseña: solo se usan con `X-User-Id` en desarrollo.
+Al terminar, `npm run db:seed:demo` muestra los UUID de los 4 usuarios demo (`demo.banca`, `demo.tech`, `demo.consultoria`, `demo.energia`). No tienen contraseña: solo se usan con `X-User-Id` en desarrollo.
 
 ---
 
@@ -246,8 +247,8 @@ knet-backend/
 Todas las respuestas son JSON. Los errores tienen la forma `{ "error": "code", "message": "…" }`.
 
 ```bash
-curl http://localhost:4000/api/events/bog/sessions?day=0
-curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application/json" -d '{"sessionCode":"bog:0:0"}'
+curl http://localhost:4000/api/events/and/sessions?day=0
+curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application/json" -d '{"sessionCode":"and:0:0"}'
 ```
 
 <details open>
@@ -301,7 +302,7 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 | GET | `/api/me/registrations` | Eventos en los que estoy inscrito |
 | POST / DELETE | `/api/me/registrations/:eventId` | Inscribirse o cancelar. Los eventos exclusivos exigen el nivel mínimo |
 | GET | `/api/me/checkins` | Mis check-ins (`?eventId=`) |
-| POST | `/api/me/checkins` | `{ sessionCode: "bog:0:2", method?: "qr"\|"nfc"\|"manual" }`: +40 XP. 403 si no está inscrito |
+| POST | `/api/me/checkins` | `{ sessionCode: "and:0:2", method?: "qr"\|"nfc"\|"manual" }`: +40 XP. 403 si no está inscrito |
 | GET | `/api/me/missions` | Misiones de mi industria, comunes y grupales, con su estado |
 | POST | `/api/me/missions/:code/complete` | Completa la misión y suma su XP |
 | GET | `/api/me/dossiers` | Todos mis dossiers |
@@ -410,8 +411,8 @@ erDiagram
 
 **Notas de diseño**
 
-- **Seed:** `db/data/` es una copia de `src/data/` del frontend (`events`, `gamification`, `industries`, `privacy`, `venues`). Si el frontend los cambia, cópialos aquí y corre `npm run db:seed`.
-- **Agenda:** el día 1 de `bog` tiene la agenda curada de cada industria (`IND[*].agenda`). Las demás sesiones se siembran por industria con `generateAgenda()` (`src/lib/agenda.js`), port de `sessionsFor()`: mismos códigos, títulos, horas, salas y `why`. Hay además una variante genérica (`industry` NULL) para usuarios sin industria. `npm run parity` verifica que coincidan.
+- **Seed:** `db/data/` es una copia de `src/data/` del frontend (`events`, `gamification`, `industries`, `privacy`, `venues`). Si el frontend los cambia, cópialos aquí y corre `npm run db:seed`. Los datos ficticios de prueba viven aparte, en `db/fixtures/demo.js` (solo `db:seed:demo`).
+- **Agenda:** el día 1 del evento principal (`MAIN_EV`, hoy `and`) tiene la agenda curada de cada industria (`IND[*].agenda`). Las demás sesiones se siembran por industria con `generateAgenda()` (`src/lib/agenda.js`), port de `sessionsFor()`: mismos códigos, títulos, horas, salas y `why`. Hay además una variante genérica (`industry` NULL) para usuarios sin industria. `npm run parity` verifica que coincidan.
 - **Consentimientos:** el frontend envía cada evento a `POST /api/me/consents` (`details` lleva el registro local con su `idLocal` y `hashLocal`). Si la API no responde, queda pendiente en el navegador y se reenvía en orden. La cadena del servidor es propia, independiente de la del navegador.
 - **Supresión y retención:** `DELETE /api/me` borra el usuario y el resto cae por `ON DELETE CASCADE`. `consents.user_id` pasa a `NULL` (el trigger de solo inserción permite únicamente ese cambio) y `consents.subject_id` conserva el UUID, que es el que entra en el hash, así que la cadena sigue siendo verificable. El registro queda **desvinculado, no anonimizado**: es la prueba de la autorización (Ley 1581, art. 17) durante el periodo de retención.
 - **Niveles:** `floor(xp / 500) + 1`, con 5 como máximo (`src/lib/levels.js`), igual que el frontend.

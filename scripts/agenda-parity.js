@@ -3,7 +3,7 @@
  *
  * 1. Extrae sessionsFor(), seeded() y hashStr() de knet-frontend/src/lib/engine/knetApp.js y los
  *    ejecuta con los datos del frontend (src/data/). Compara cada (industria, evento, día) distinto
- *    de bog:0 con generateAgenda() de src/lib/agenda.js.
+ *    del día 0 del evento principal (MAIN_EV) con generateAgenda() de src/lib/agenda.js.
  * 2. Si la API está en marcha, compara también GET /api/events/:id/sessions?day=&industry= (lo sembrado).
  *    Solo hace GET: no modifica ningún usuario.
  *
@@ -26,9 +26,11 @@ try { src = await readFile(engineFile, "utf8"); } catch {
   console.error(`No encuentro ${engineFile}. Indica la ruta del frontend con FRONTEND_DIR.`);
   process.exit(1);
 }
-const { EVENTS, EV_DAYS } = await import(pathToFileURL(path.join(FRONT, "src/data/events.js")).href);
+const { EVENTS, EV_DAYS, MAIN_EV } = await import(pathToFileURL(path.join(FRONT, "src/data/events.js")).href);
 EVENTS.forEach((e) => { e.days = EV_DAYS[e.id] || ["2026-12-10"]; }); // igual que bootKnetApp()
-const { IND, PERSONAS } = await import(pathToFileURL(path.join(FRONT, "src/data/industries.js")).href);
+const { IND, IND_INTERESTS } = await import(pathToFileURL(path.join(FRONT, "src/data/industries.js")).href);
+// Igual que knetApp.js: PERSONAS = perfil base por industria con los intereses sugeridos
+const PERSONAS = Object.fromEntries(Object.keys(IND).map((k) => [k, { interests: IND_INTERESTS[k].slice() }]));
 
 /** Devuelve el texto de la función `function <name>(` hasta su llave de cierre */
 function extractFunction(name) {
@@ -46,9 +48,9 @@ if (!hashLine) throw new Error("No encontré const hashStr en knetApp.js");
 
 // sessionsFor() del frontend, aislado: A.ind se cambia por industria; ideaOf/INSIGHTS no influyen en la paridad
 const A = { ind: null };
-const frontSessionsFor = new Function("EVENTS", "IND", "PERSONAS", "A", "INSIGHTS", "ideaOf",
+const frontSessionsFor = new Function("EVENTS", "IND", "PERSONAS", "A", "INSIGHTS", "ideaOf", "MAIN_EV",
   `${hashLine}\n${extractFunction("seeded")}\nfunction evById(id) { return EVENTS.find(e => e.id === id); }\n` +
-  `${extractFunction("sessionsFor")}\nreturn sessionsFor;`)(EVENTS, IND, PERSONAS, A, {}, () => null);
+  `${extractFunction("sessionsFor")}\nreturn sessionsFor;`)(EVENTS, IND, PERSONAS, A, {}, () => null, MAIN_EV);
 
 const frontToApi = (s) => ({ code: s.id, day: s.day, slot: s.i, time: s.tm, kind: s.kind, title: s.ttl, room: s.room, tag: s.tag, why: s.why });
 const FIELDS = ["code", "day", "slot", "time", "kind", "title", "room", "tag", "why"];
@@ -71,7 +73,7 @@ for (const ind of Object.keys(IND)) {
   A.ind = ind;
   for (const ev of EVENTS) {
     for (let di = 0; di < ev.days.length; di++) {
-      if (ev.id === "bog" && di === 0) continue; // agenda curada, no generada
+      if (ev.id === MAIN_EV && di === 0) continue; // agenda curada, no generada
       const expected = frontSessionsFor(ev.id, di).map(frontToApi);
       compare(`port ${ind} ${ev.id}:${di}`, expected, generateAgenda(ev, di, ind, IND[ind], PERSONAS[ind].interests));
       if (apiUp) {

@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "db:migrate": "node db/migrate.js",
     "db:seed": "node db/seed.js",
+    "db:seed:demo": "node db/seed.js --demo",
     "db:reset": "node db/migrate.js --reset && node db/seed.js",
     "smoke": "node scripts/smoke.js",
     "test:linkedin": "node scripts/linkedin-mock.js",
