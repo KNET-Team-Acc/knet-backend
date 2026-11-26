@@ -8,14 +8,14 @@ import { toSession } from "../../lib/serialize.js";
 
 const router = Router();
 
-export const sessionCode = z.string().regex(/^[a-z0-9]+:\d+:\d+$/, "Formato esperado: evento:día:slot (p. ej. bog:0:2)");
+export const sessionCode = z.string().regex(/^[a-z0-9]+:\d+:\d+$/, "Formato esperado: evento:día:slot (p. ej. and:0:2)");
 
 const postSchema = z.object({
   sessionCode,
   method: z.enum(["qr", "nfc", "manual"]).default("qr"),
 }).strict();
 
-// GET /api/me/checkins?eventId=bog
+// GET /api/me/checkins?eventId=and
 router.get("/", async (req, res) => {
   const eventId = z.string().max(40).optional().parse(req.query.eventId);
   res.json({ checkins: await listCheckins(pool, req.user.id, req.user.industry, eventId ?? null) });

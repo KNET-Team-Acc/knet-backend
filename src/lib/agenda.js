@@ -5,11 +5,11 @@
  * hashStr(`${ind}|${ev}|${día}`), orden de tags según los intereses de la persona de la industria
  * y el motivo `why`. Los IDs `ev:día:i` son los mismos del frontend (check-ins y misiones dependen de ellos).
  *
- * Igual que el frontend, los intereses son los de PERSONAS[industria], no los del perfil: así la agenda
+ * Igual que el frontend, los intereses son los sugeridos de la industria (IND_INTERESTS), no los del perfil: así la agenda
  * coincide en ambos lados. Si cambian las plantillas en el frontend, hay que cambiarlas aquí
  * (scripts/agenda-parity.js lo detecta).
  *
- * El día 0 del Summit demo (`bog:0`) no pasa por aquí: usa la agenda curada IND[industria].agenda.
+ * El día 0 del evento principal (`MAIN_EV`, hoy `and:0`) no pasa por aquí: usa la agenda curada IND[industria].agenda.
  */
 
 export const TIMES = ["08:30", "10:15", "14:00", "16:30"];
@@ -44,7 +44,7 @@ export function seeded(seed) {
  * @param {number} di  índice del día
  * @param {string} ind  id de la industria (clave de IND)
  * @param {{ label: string, role: string }} industry  IND[ind]
- * @param {string[]} interests  PERSONAS[ind].interests
+ * @param {string[]} interests  IND_INTERESTS[ind]
  * @returns {{ code, eventId, day, slot, time, kind, title, room, tag, why }[]}
  */
 export function generateAgenda(ev, di, ind, industry, interests) {

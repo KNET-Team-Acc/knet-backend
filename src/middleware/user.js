@@ -19,16 +19,18 @@ async function fromBearer(token) {
   return u;
 }
 
-async function fromDevHeaders(req) {
+async function fromDevHeaders(req, optional) {
   const id = req.get("x-user-id");
   if (id && !UUID.test(id)) throw new HttpError(400, "X-User-Id debe ser un UUID");
   const { rows: [u] } = id
     ? await query("SELECT * FROM users WHERE id = $1", [id])
     : await query("SELECT * FROM users WHERE email = $1", [config.demoUserEmail]);
   if (!u) {
+    // Catálogo público: sin usuario demo sembrado (db:seed sin --demo) se sirve como anónimo
+    if (!id && optional) return { user: null, via: null };
     throw id
       ? new HttpError(404, "Usuario no encontrado")
-      : new HttpError(503, `No existe el usuario demo ${config.demoUserEmail}: ejecuta npm run db:seed`);
+      : new HttpError(503, `No existe el usuario demo ${config.demoUserEmail}: ejecuta npm run db:seed:demo`);
   }
   return { user: u, via: id ? "header" : "demo" };
 }
@@ -43,7 +45,7 @@ export function resolveUser({ optional = false } = {}) {
     } else if (auth) {
       throw new HttpError(401, "Usa Authorization: Bearer <token>", "invalid_token");
     } else if (config.devIdentity) {
-      const r = await fromDevHeaders(req);
+      const r = await fromDevHeaders(req, optional);
       req.user = r.user;
       req.authVia = r.via;
     } else if (optional) {

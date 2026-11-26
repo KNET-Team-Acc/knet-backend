@@ -51,22 +51,35 @@ console.log(`    usando demo.energia@knet.local (${userId})\n`);
 const evs = await check("listar eventos", "GET", "/api/events");
 console.log(`    ${evs.events.length} eventos · reales: ${evs.events.filter((e) => e.kind === "real").map((e) => e.id).join(", ")}`);
 await check("solo reales", "GET", "/api/events?kind=real");
-await check("detalle bog", "GET", "/api/events/bog");
-const ses = await check("sesiones bog día 0", "GET", "/api/events/bog/sessions?day=0");
+// Catálogo real (issue #16): exactamente los 4 eventos con fuente oficial, sin los retirados
+const REAL_IDS = ["and", "ais", "edu", "adc"];
+const listed = (evs?.events || []).map((e) => e.id).sort();
+if (listed.join() !== [...REAL_IDS].sort().join() || !evs.events.every((e) => e.kind === "real" && e.sourceUrl)) {
+  failed++; console.log(`    ✗ /api/events debería traer solo ${REAL_IDS.join(", ")} (reales, con fuente); llegaron: ${listed.join(", ")}`);
+}
+for (const id of REAL_IDS) {
+  const d = await check(`detalle ${id}`, "GET", `/api/events/${id}`);
+  if (d?.event?.id !== id || !d.event.info || !d.event.venue || !Array.isArray(d.event.speakers)) {
+    failed++; console.log(`    ✗ el detalle de ${id} debería traer ficha, recinto y speakers`);
+  }
+}
+for (const id of ["bog", "med", "baq", "x2", "x3", "x4", "x5"]) await check(`retirado ${id}`, "GET", `/api/events/${id}`, undefined, [404]);
+await check("evento sin días publicados", "GET", "/api/events/ais/sessions?day=0", undefined, [404]);
+const ses = await check("sesiones and día 0", "GET", "/api/events/and/sessions?day=0");
 console.log(`    1ª sesión: ${ses.sessions[0].time} · ${ses.sessions[0].title}`);
 // Agenda personalizada por industria (paridad completa con el frontend: npm run parity)
-const agMine = await check("agenda med día 0 (industria del perfil)", "GET", "/api/events/med/sessions?day=0");
-const agTech = await check("agenda med día 0 con industry=tech", "GET", "/api/events/med/sessions?day=0&industry=tech");
-const titles = (r) => r?.sessions?.map((s) => s.title).join("|");
+const agMine = await check("agenda edu día 0 (industria del perfil)", "GET", "/api/events/edu/sessions?day=0");
+const agTech = await check("agenda edu día 0 con industry=tech", "GET", "/api/events/edu/sessions?day=0&industry=tech");
+const titles = (r) => r?.sessions?.map((s) => `${s.title} @ ${s.room} · ${s.why}`).join("|");
 if (agMine?.industry !== "energia" || agTech?.industry !== "tech") { failed++; console.log("    ✗ industry debería ser energia (perfil) y tech (explícita)"); }
 if (titles(agMine) === titles(agTech)) { failed++; console.log("    ✗ la agenda de energía y la de tecnología deberían ser distintas"); }
-if (!agMine?.sessions?.length || !agMine.sessions.every((s) => s.why && /^med:0:\d$/.test(s.code))) {
-  failed++; console.log("    ✗ cada sesión debe traer why y un código med:0:i");
+if (!agMine?.sessions?.length || !agMine.sessions.every((s) => s.why && /^edu:0:\d$/.test(s.code))) {
+  failed++; console.log("    ✗ cada sesión debe traer why y un código edu:0:i");
 }
 console.log(`    energía: ${agMine?.sessions?.[0]?.title} · tech: ${agTech?.sessions?.[0]?.title}`);
-await check("agenda con industria inexistente", "GET", "/api/events/med/sessions?day=0&industry=nope", undefined, [400]);
+await check("agenda con industria inexistente", "GET", "/api/events/edu/sessions?day=0&industry=nope", undefined, [400]);
 await check("evento inexistente", "GET", "/api/events/nope", undefined, [404]);
-await check("día fuera de rango", "GET", "/api/events/med/sessions?day=5", undefined, [404]);
+await check("día fuera de rango", "GET", "/api/events/edu/sessions?day=5", undefined, [404]);
 
 await check("mi perfil", "GET", "/api/me");
 await check("editar perfil", "PATCH", "/api/me", { location: "Cali, Colombia", interests: ["Gemelos digitales", "Datos"] });
@@ -83,23 +96,27 @@ const cons = await check("cadena de consentimientos", "GET", "/api/me/consents")
 console.log(`    ${cons.consents.length} registros · cadena válida: ${cons.chain.valid}`);
 if (!cons.chain.valid) failed++;
 
-await check("check-in", "POST", "/api/me/checkins", { sessionCode: "bog:0:1", method: "qr" }, [201, 409]);
-await check("check-in repetido", "POST", "/api/me/checkins", { sessionCode: "bog:0:1" }, [409]);
-await check("check-in sin inscripción", "POST", "/api/me/checkins", { sessionCode: "and:0:0" }, [403]); // and: el smoke nunca inscribe en este evento
+await check("check-in", "POST", "/api/me/checkins", { sessionCode: "and:0:1", method: "qr" }, [201, 409]);
+await check("check-in repetido", "POST", "/api/me/checkins", { sessionCode: "and:0:1" }, [409]);
 await check("mis check-ins", "GET", "/api/me/checkins");
 
 await check("misiones", "GET", "/api/me/missions");
 await check("completar misión", "POST", "/api/me/missions/energia-m0/complete", undefined, [201, 409]);
 await check("misión de otra industria", "POST", "/api/me/missions/tech-m0/complete", undefined, [404]);
 
-await check("evento exclusivo bloqueado", "POST", "/api/me/registrations/x5", undefined, [403]);
-await check("inscribirse en med", "POST", "/api/me/registrations/med", undefined, [200, 201]);
-await check("check-in en sesión generada med:0:2", "POST", "/api/me/checkins", { sessionCode: "med:0:2" }, [201, 409]);
-const medCk = await check("mis check-ins en med", "GET", "/api/me/checkins?eventId=med");
-const ck = medCk?.checkins?.find((c) => c.sessionCode === "med:0:2");
+await check("evento retirado (bog)", "POST", "/api/me/registrations/bog", undefined, [404]);
+// Sin inscripción en edu (se borra la de una corrida anterior) el check-in se rechaza
+await check("cancelar inscripción previa en edu", "DELETE", "/api/me/registrations/edu", undefined, [204, 404]);
+await check("check-in sin inscripción", "POST", "/api/me/checkins", { sessionCode: "edu:0:0" }, [403]);
+// Inscribirse en los eventos reales (adc no: el smoke nunca inscribe ahí, ver «dossier sin inscripción»)
+for (const id of ["and", "ais"]) await check(`inscribirse en ${id}`, "POST", `/api/me/registrations/${id}`, undefined, [200, 201]);
+await check("inscribirse en edu", "POST", "/api/me/registrations/edu", undefined, [200, 201]);
+await check("check-in en sesión generada edu:0:2", "POST", "/api/me/checkins", { sessionCode: "edu:0:2" }, [201, 409]);
+const eduCk = await check("mis check-ins en edu", "GET", "/api/me/checkins?eventId=edu");
+const ck = eduCk?.checkins?.find((c) => c.sessionCode === "edu:0:2");
 if (ck?.session?.title !== agMine?.sessions?.[2]?.title) { failed++; console.log("    ✗ el check-in debería mostrar la sesión de la agenda de energía"); }
 
-await check("conectar por QR", "POST", "/api/me/connections", { name: "Felipe L.", source: "qr", eventId: "bog", context: "Gemelos digitales" }, [201, 409]);
+await check("conectar por QR", "POST", "/api/me/connections", { name: "Felipe L.", source: "qr", eventId: "and", context: "Gemelos digitales" }, [201, 409]);
 await check("QR con asistente de SUMMIT_POOL", "POST", "/api/me/connections", { name: "Andrea P.", source: "qr" }, [201, 409]);
 // Ciclo completo de una solicitud: pendiente → aceptada → eliminada (se deja eliminada para poder repetir el smoke)
 await check("solicitud pendiente", "POST", "/api/me/connections", { name: "Paula B." }, [201]);
@@ -148,7 +165,7 @@ const realUser = async (name) => (await sql(
 const ana = await realUser("Ana"), beto = await realUser("Beto"), caro = await realUser("Caro");
 // QR dinámico: Beto muestra su código y Ana lo escanea
 userId = beto;
-const qrB = await check("token QR de Beto", "GET", "/api/me/qr-token?eventId=bog");
+const qrB = await check("token QR de Beto", "GET", "/api/me/qr-token?eventId=and");
 if (!/^knet1\.[\w-]+\.[\w-]+$/.test(qrB?.token ?? "") || !(qrB?.refreshIn < qrB?.ttl)) { failed++; console.log("    ✗ el token debería ser knet1.<payload>.<firma> con refreshIn < ttl"); }
 const ownQr = await check("Beto escanea su propio QR", "POST", "/api/me/connections/scan", { token: qrB.token }, [400]);
 userId = ana;
@@ -159,7 +176,7 @@ const { signQrToken } = await import("../src/lib/qr.js");
 const old = await check("token caducado", "POST", "/api/me/connections/scan", { token: signQrToken({ userId: beto }, Date.now() - 600_000).token }, [400]);
 if (ownQr?.error !== "own_qr" || bad?.error !== "invalid_qr" || old?.error !== "qr_expired") { failed++; console.log("    ✗ errores esperados: own_qr, invalid_qr, qr_expired"); }
 const sc = await check("Ana escanea a Beto", "POST", "/api/me/connections/scan", { token: qrB.token, context: "Charla de RAG" }, [201]);
-if (sc?.xpAwarded !== 100 || !sc?.created || sc?.connection?.contact?.userId !== beto || sc?.connection?.eventId !== "bog") {
+if (sc?.xpAwarded !== 100 || !sc?.created || sc?.connection?.contact?.userId !== beto || sc?.connection?.eventId !== "and") {
   failed++; console.log("    ✗ el escaneo debería crear la conexión con Beto (+100 XP)");
 }
 const used = await check("token ya usado", "POST", "/api/me/connections/scan", { token: qrB.token }, [409]);
@@ -230,17 +247,17 @@ async function totemCheck(label, path, body, ok, key) {
   return r.json;
 }
 userId = ana;
-await check("Ana se inscribe en bog", "POST", "/api/me/registrations/bog", undefined, [200, 201]);
-await totemCheck("NFC sin credencial de tótem", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [401], null);
-await totemCheck("NFC con credencial inválida", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [401], "no-es-la-clave");
-const nfc1 = await totemCheck("NFC con la credencial (UUID)", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [201]);
+await check("Ana se inscribe en and", "POST", "/api/me/registrations/and", undefined, [200, 201]);
+await totemCheck("NFC sin credencial de tótem", "/api/events/and/nfc-checkin", { sessionCode: "and:0:1", userId: ana }, [401], null);
+await totemCheck("NFC con credencial inválida", "/api/events/and/nfc-checkin", { sessionCode: "and:0:1", userId: ana }, [401], "no-es-la-clave");
+const nfc1 = await totemCheck("NFC con la credencial (UUID)", "/api/events/and/nfc-checkin", { sessionCode: "and:0:1", userId: ana }, [201]);
 if (nfc1?.checkin?.method !== "nfc" || nfc1?.xpAwarded !== 40) { failed++; console.log("    ✗ el check-in NFC debería quedar con method nfc y +40 XP"); }
-await totemCheck("NFC repetido", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:1", userId: ana }, [409]);
-const qrA = await check("token QR de Ana", "GET", "/api/me/qr-token?eventId=bog");
-await totemCheck("NFC con el teléfono (token)", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:2", token: qrA.token }, [201]);
-await totemCheck("NFC con token ya usado", "/api/events/bog/nfc-checkin", { sessionCode: "bog:0:3", token: qrA.token }, [409]);
-await totemCheck("NFC con sesión de otro evento", "/api/events/bog/nfc-checkin", { sessionCode: "med:0:1", userId: ana }, [404]);
-const nfcList = await check("check-ins de Ana", "GET", "/api/me/checkins?eventId=bog");
+await totemCheck("NFC repetido", "/api/events/and/nfc-checkin", { sessionCode: "and:0:1", userId: ana }, [409]);
+const qrA = await check("token QR de Ana", "GET", "/api/me/qr-token?eventId=and");
+await totemCheck("NFC con el teléfono (token)", "/api/events/and/nfc-checkin", { sessionCode: "and:0:2", token: qrA.token }, [201]);
+await totemCheck("NFC con token ya usado", "/api/events/and/nfc-checkin", { sessionCode: "and:0:3", token: qrA.token }, [409]);
+await totemCheck("NFC con sesión de otro evento", "/api/events/and/nfc-checkin", { sessionCode: "edu:0:1", userId: ana }, [404]);
+const nfcList = await check("check-ins de Ana", "GET", "/api/me/checkins?eventId=and");
 if (nfcList?.checkins?.filter((k) => k.method === "nfc").length !== 2) { failed++; console.log("    ✗ deberían aparecer 2 check-ins NFC"); }
 const delAna = await check("Ana borra su cuenta", "DELETE", "/api/me");
 console.log(`    borrado: cafés ${delAna?.deleted?.coffees} · mensajes ${delAna?.deleted?.messages}`);
@@ -255,14 +272,15 @@ if (delAna?.deleted?.coffees !== 1 || delAna?.deleted?.messages !== 4 || left.co
 for (const id of [beto, caro]) { userId = id; await check("limpiar usuario de prueba", "DELETE", "/api/me"); }
 userId = energiaId;
 
-await check("generar dossier", "POST", "/api/me/dossiers/bog", { ideas: ["Los gemelos digitales rinden más en activos críticos."], plan: ["Priorizar 2 activos críticos"] }, [200, 201]);
-const dos = await check("leer dossier", "GET", "/api/me/dossiers/bog");
+await check("generar dossier", "POST", "/api/me/dossiers/and", { ideas: ["Los gemelos digitales rinden más en activos críticos."], plan: ["Priorizar 2 activos críticos"] }, [200, 201]);
+const dos = await check("leer dossier", "GET", "/api/me/dossiers/and");
 console.log(`    sesiones: ${dos.dossier.content.summary.sessionsAttended.length} · contactos: ${dos.dossier.content.summary.contacts.length} · XP: ${dos.dossier.content.summary.xp}`);
-await check("dossier sin inscripción", "POST", "/api/me/dossiers/and", {}, [403]);
+await check("cancelar inscripción previa en adc", "DELETE", "/api/me/registrations/adc", undefined, [204, 404]);
+await check("dossier sin inscripción", "POST", "/api/me/dossiers/adc", {}, [403]); // adc: el smoke no inscribe al demo en este evento
 
 // IA: sin AI_API_KEY los tres endpoints responden 503 ai_unavailable (con key: npm run test:ai)
 if (!process.env.AI_API_KEY) {
-  for (const [path, body] of [["/api/ai/chat", { message: "¿Qué sesión sigue?" }], ["/api/ai/simulate", { contactName: "Felipe L.", message: "Hola" }], ["/api/ai/dossier", { eventId: "bog" }]]) {
+  for (const [path, body] of [["/api/ai/chat", { message: "¿Qué sesión sigue?" }], ["/api/ai/simulate", { contactName: "Felipe L.", message: "Hola" }], ["/api/ai/dossier", { eventId: "and" }]]) {
     const r = await check("IA sin key → 503", "POST", path, body, [503]);
     if (r?.error !== "ai_unavailable") { failed++; console.log("    ✗ debería ser ai_unavailable"); }
   }
@@ -288,17 +306,18 @@ if (out?.error !== "legal_outdated" || !out?.required) { failed++; console.log("
 const acc = await check("consentimiento del usuario a borrar", "POST", "/api/me/consents",
   { type: "aceptacion", documents: [{ id: "terminos", version: "1.2" }, { id: "privacidad", version: "1.2" }] }, [201]);
 if (acc?.legalVersion !== "1.2") { failed++; console.log("    ✗ la aceptación debería fijar legalVersion 1.2"); }
-await check("inscripción del usuario a borrar", "POST", "/api/me/registrations/bog", undefined, [200, 201]);
+// Un usuario nuevo puede inscribirse en cualquiera de los 4 eventos reales
+for (const id of REAL_IDS) await check(`inscripción del usuario a borrar en ${id}`, "POST", `/api/me/registrations/${id}`, undefined, [201]);
 // Cambiar la industria del perfil cambia la agenda (con el usuario desechable, para no tocar los demo)
 await check("cambiar industria a tech", "PATCH", "/api/me", { industry: "tech" });
-const agAfter = await check("agenda med día 0 tras el cambio", "GET", "/api/events/med/sessions?day=0");
+const agAfter = await check("agenda edu día 0 tras el cambio", "GET", "/api/events/edu/sessions?day=0");
 if (titles(agAfter) !== titles(agTech) || titles(agAfter) === titles(agMine)) {
   failed++; console.log("    ✗ tras cambiar a tech la agenda debería ser la de tecnología");
 }
 await check("cliente no puede registrar «supresion»", "POST", "/api/me/consents", { type: "supresion" }, [400]);
 const del = await check("borrar mi cuenta", "DELETE", "/api/me");
 console.log(`    borrado: ${JSON.stringify(del?.deleted)} · consentimientos conservados: ${del?.consentsRetained}`);
-if (del?.deleted?.registrations !== 1) { failed++; console.log("    ✗ debería haber borrado 1 inscripción"); }
+if (del?.deleted?.registrations !== REAL_IDS.length) { failed++; console.log(`    ✗ debería haber borrado ${REAL_IDS.length} inscripciones`); }
 await check("perfil borrado", "GET", "/api/me", undefined, [404]);
 const { rows: kept } = await sql("SELECT * FROM consents WHERE subject_id = $1 ORDER BY id", [tmp.id]);
 const { verifyChain } = await import("../src/lib/consents.js");

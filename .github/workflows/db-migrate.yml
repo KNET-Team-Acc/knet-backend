@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       seed:
-        description: "Correr también db:seed (solo hace upserts del catálogo y los usuarios demo)"
+        description: "Correr también db:seed (catálogo real: upserts, retira eventos fuera del catálogo y quita los contactos ficticios)"
         type: boolean
         default: true
 

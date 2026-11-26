@@ -8,7 +8,7 @@ import { getScopes } from "../../lib/queries.js";
 
 const router = Router();
 
-// GET /api/me/qr-token?eventId=bog → token firmado y de corta vida para mostrar en el QR (o emitir por NFC).
+// GET /api/me/qr-token?eventId=and → token firmado y de corta vida para mostrar en el QR (o emitir por NFC).
 // El frontend pide uno nuevo cada `refreshIn` segundos; cada token sirve una sola vez.
 router.get("/", async (req, res) => {
   const eventId = z.string().max(40).optional().parse(req.query.eventId);
