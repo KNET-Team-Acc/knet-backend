@@ -18,6 +18,7 @@ API REST de KNET. Express 5 + PostgreSQL 16 (Docker, host **5433** → contenedo
 - `npm run test:stream` — SSE de `/api/me/stream` (solo necesita la BD; `EVENTS_PG_NOTIFY=true` prueba LISTEN/NOTIFY).
 - `npm run test:linkedin` — flujo OAuth de LinkedIn con los endpoints de LinkedIn simulados (solo necesita la BD).
 - `npm run parity` — paridad de la agenda con `sessionsFor()` del frontend (`FRONTEND_DIR`, por defecto `../knet-frontend`); si la API está en marcha, compara también lo sembrado
+- `npm run parity:venues` — paridad de los recintos 3D/AR (`VENUES`, `GROUND`) entre `src/data/venues.js` del frontend y `db/data/venues.js`; con la API en marcha, también el `venue` de `GET /api/events/:id`. El smoke exige que el `venue` sembrado coincida con `db/data/venues.js` y que cada evento real tenga una distribución propia
 
 ## Reglas
 - Nivel = `floor(xp / 500) + 1`, máximo 5 (`src/lib/levels.js`), igual que el frontend.
