@@ -121,14 +121,15 @@ npm run smoke
 |---|---|
 | `npm run dev` / `npm start` | Levanta la API (`dev` se recarga al guardar). |
 | `npm run db:migrate` | Aplica las migraciones de `db/migrations/` que falten. |
-| `npm run db:seed` | Carga el catálogo real de `db/data/` (los 4 eventos con fuente oficial). Idempotente: hace upserts, retira los eventos que ya no están en `EVENTS` (antes mueve inscripciones, check-ins, dossiers, conexiones y cafés a su sucesor de `EV_ALIAS`, p. ej. `bog` → `and`) y quita los contactos ficticios. Es el que corre en producción. |
+| `npm run db:seed` | Carga el catálogo real de `db/data/` (los 4 eventos con fuente oficial). Idempotente: hace upserts, retira los eventos del catálogo que ya no están en `EVENTS` (nunca los creados por organizadores) (antes mueve inscripciones, check-ins, dossiers, conexiones y cafés a su sucesor de `EV_ALIAS`, p. ej. `bog` → `and`) y quita los contactos ficticios. Es el que corre en producción. |
 | `npm run db:seed:demo` | Lo mismo más los fixtures de prueba de `db/fixtures/demo.js`: usuarios `demo.<industria>@knet.local`, matches ficticios y asistentes simulados del QR. Lo usan `smoke`, `test:ai` y `test:stream` (CI). |
 | `npm run db:reset` | **Borra todo** y vuelve a migrar y a cargar el seed (bloqueado con `NODE_ENV=production`). |
-| `npm run smoke` | Prueba todos los endpoints contra la API en marcha: cuentas, refresh, legal, misiones, red, QR, cafés, chat, supresión… |
+| `npm run smoke` | Prueba todos los endpoints contra la API en marcha: cuentas, refresh, legal, misiones, red, QR, cafés, chat, panel de creador, supresión… |
 | `npm run test:ai` | Prueba `/api/ai/*` con el proveedor simulado (no gasta tokens ni necesita la API en marcha). |
 | `npm run test:linkedin` | Prueba el flujo OAuth de LinkedIn simulando sus endpoints. |
 | `npm run test:stream` | Prueba el SSE de `/api/me/stream`: eventos, heartbeat y reanudación. Con `EVENTS_PG_NOTIFY=true`, LISTEN/NOTIFY. |
 | `npm run parity` | Compara la agenda con `sessionsFor()` del frontend (`FRONTEND_DIR`, `../knet-frontend` por defecto) y, con la API en marcha, también su respuesta. |
+| `npm run user:role -- <correo> [attendee\|organizer\|admin]` | Muestra o cambia el rol de una cuenta (`users.account_role`). No hay endpoint para darse permisos: lo decide el equipo de KNET. |
 
 Al terminar, `npm run db:seed:demo` muestra los UUID de los 4 usuarios demo (`demo.banca`, `demo.tech`, `demo.consultoria`, `demo.energia`). No tienen contraseña: solo se usan con `X-User-Id` en desarrollo.
 
@@ -204,10 +205,10 @@ knet-backend/
 │   └── lib/                     # auth, xp, levels, qr, consents, checkins, threads, agenda,
 │                                # dossier, ai, events-bus, queries, serialize, http
 ├── db/
-│   ├── migrations/              # 001_init … 005_qr_nfc (SQL numerado; nunca se editan)
+│   ├── migrations/              # 001_init … 006_roles (SQL numerado; nunca se editan)
 │   ├── data/                    # Copia de src/data/ del frontend (catálogo del seed)
 │   ├── migrate.js · seed.js
-├── scripts/                     # smoke, ai-mock, linkedin-mock, stream-test, agenda-parity
+├── scripts/                     # smoke, ai-mock, linkedin-mock, stream-test, agenda-parity, set-role
 ├── .github/workflows/           # ci.yml (pruebas) y db-migrate.yml (migraciones en Neon)
 ├── Dockerfile · docker-entrypoint.sh · docker-compose.yml
 └── vercel.json · .vercelignore
@@ -273,11 +274,35 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/events` | Eventos (`?kind=real\|demo\|exclusive`, `?industry=tech`). Incluye `locked` y `registered` |
-| GET | `/api/events/:id` | Detalle con ficha (`info`), recinto 3D (`venue`) y speakers |
+| GET | `/api/events` | Eventos publicados (`?kind=real\|demo\|exclusive`, `?industry=tech`). Incluye `locked`, `registered` y `hosted` (creado por un organizador en el panel) |
+| GET | `/api/events/:id` | Detalle con ficha (`info`), recinto 3D (`venue`) y speakers. Los `hosted` traen además `sessions` (todas las charlas) y `missions`. Un borrador solo lo ven su organizador y los admin |
 | GET | `/api/events/:id/sessions?day=0&industry=tech` | Agenda del día personalizada por industria (la del perfil, o `industry` si se envía), con `why` y `checkedIn` |
 | POST | `/api/events/:id/nfc-checkin` | **Tótem**: header `X-Totem-Key` (= `TOTEM_SECRET`) y opcional `X-Totem-Id`. `{ sessionCode, token \| userId }` (token QR del teléfono o UUID de la credencial) → check-in con `method: "nfc"` (+40 XP). 401 `invalid_totem`, 503 `nfc_unavailable`, 409 si ya hizo check-in o el token ya se usó |
 | GET | `/api/contacts` | Personas con las que se puede conectar (`?industry=`) |
+
+</details>
+
+<details>
+<summary><b>Panel de creador de eventos (organizer / admin)</b></summary>
+
+Solo cuentas con `accountRole` `organizer` o `admin` (`npm run user:role`). Sin rol: 403 `forbidden_role`; sin sesión: 401. Un organizador solo ve y edita sus eventos (403 `not_owner`); un admin, todos. Los errores de validación son 400 `validation_error` con `issues[]` en español.
+
+| Método | Ruta | Descripción |
+|---|---|---|
+| GET | `/api/admin/events` | Mis eventos creados con `status` (`draft`\|`published`) y `counts` (admin: `?all=1` para ver todos) |
+| POST | `/api/admin/events` | `{ name, city, venueName?, dateLabel?, lat?, lon?, tags?, industries?, description?, sourceUrl?, organizer? }` → 201 borrador con id `o<9>` |
+| GET / PATCH / DELETE | `/api/admin/events/:id` | Detalle completo (ficha, recinto, días, speakers, charlas y misiones), editar los datos básicos o borrar (los del catálogo sembrado: 409 `catalog_event`) |
+| PUT | `/api/admin/events/:id/days` | `{ days: ["AAAA-MM-DD", …] }` en orden. Quitar un día borra sus charlas |
+| PUT | `/api/admin/events/:id/info` | `{ info: { tone: [hex, hex], accent, lema, para, formato[], agenda: [[hora, título, detalle]], llevas[] } }` (forma de `EV_INFO`) |
+| PUT | `/api/admin/events/:id/venue` | `{ venue }` con la forma de `VENUES` (zonas, nodos y pasillos); `null` lo quita |
+| GET / POST | `/api/admin/events/:id/speakers` | `{ name, role?, org?, session?, talk?, bio?, tags?, avatar? }`. 409 si el nombre se repite |
+| PATCH / DELETE | `/api/admin/events/:id/speakers/:sid` | Editar o quitar un speaker |
+| GET / POST | `/api/admin/events/:id/sessions` | Charla `{ day, time: "HH:MM", kind: Keynote\|Panel\|Taller\|Charla\|Networking, title, room?, speaker?, tag?, why? }` → `code` = `evento:día:slot` |
+| PATCH / DELETE | `/api/admin/events/:id/sessions/:sid` | Editar (sin cambiar el día) o quitar una charla |
+| GET / POST | `/api/admin/events/:id/missions` | `{ type: presencial\|networking\|contenido\|quiz, title, condition?, xp (10–500) }` → misión `kind: "event"` para los inscritos |
+| PATCH / DELETE | `/api/admin/events/:id/missions/:code` | Editar o quitar una misión |
+| POST | `/api/admin/events/:id/publish` | Lo publica en `GET /api/events`. 400 `incomplete_event` con `missing[]` si falta un día, una charla, la ficha o la descripción |
+| POST | `/api/admin/events/:id/unpublish` | Vuelve a borrador |
 
 </details>
 
@@ -286,7 +311,7 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/me` | Perfil, XP, nivel, permisos, estadísticas e inscripciones |
+| GET | `/api/me` | Perfil, XP, nivel, permisos, rol de la cuenta (`accountRole`), estadísticas e inscripciones |
 | PATCH | `/api/me` | Edita `name`, `role`, `company`, `industry`, `seniority`, `location`, `interests`, `avatar` y `scopes` |
 | DELETE | `/api/me` | Suprime el perfil, el progreso y las sesiones. Exige Bearer (o `X-User-Id` en desarrollo); las cuentas demo responden 403 `demo_account`. Los consentimientos se conservan desvinculados con un evento `supresion`. Devuelve `{ deleted: { profile, registrations, … }, consentsRetained }` |
 | GET | `/api/me/consents` | Registro de consentimientos, con la verificación de la cadena (`chain.valid`) |
@@ -300,10 +325,10 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/me/registrations` | Eventos en los que estoy inscrito |
-| POST / DELETE | `/api/me/registrations/:eventId` | Inscribirse o cancelar. Los eventos exclusivos exigen el nivel mínimo |
+| POST / DELETE | `/api/me/registrations/:eventId` | Inscribirse o cancelar. Los eventos exclusivos exigen el nivel mínimo; los borradores responden 404 |
 | GET | `/api/me/checkins` | Mis check-ins (`?eventId=`) |
 | POST | `/api/me/checkins` | `{ sessionCode: "and:0:2", method?: "qr"\|"nfc"\|"manual" }`: +40 XP. 403 si no está inscrito |
-| GET | `/api/me/missions` | Misiones de mi industria, comunes y grupales, con su estado |
+| GET | `/api/me/missions` | Misiones de mi industria, comunes, grupales y las de los eventos en los que estoy inscrito (`kind: "event"`, con `eventId`), con su estado |
 | POST | `/api/me/missions/:code/complete` | Completa la misión y suma su XP |
 | GET | `/api/me/dossiers` | Todos mis dossiers |
 | GET / POST | `/api/me/dossiers/:eventId` | Lee o genera el dossier. `POST { ideas?, plan?, notes? }`; sesiones, contactos y XP los calcula el servidor |
@@ -377,7 +402,7 @@ es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)
 
 ## Modelo de datos
 
-Cinco migraciones en `db/migrations/`: `001_init`, `002_user_erasure`, `003_auth`, `004_coffees_messages` y `005_qr_nfc`.
+Seis migraciones en `db/migrations/`: `001_init`, `002_user_erasure`, `003_auth`, `004_coffees_messages`, `005_qr_nfc` y `006_roles`.
 
 ```mermaid
 erDiagram
@@ -400,10 +425,10 @@ erDiagram
 
 | Grupo | Tablas |
 |---|---|
-| **Perfil** | `users` (con `password_hash`, `linkedin_sub`, `legal_version`, `email_verified_at`, `photo_url`), `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción) |
+| **Perfil** | `users` (con `password_hash`, `linkedin_sub`, `legal_version`, `email_verified_at`, `photo_url` y `account_role`: `attendee`\|`organizer`\|`admin`; `role` es el cargo del perfil), `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción) |
 | **Sesiones** | `refresh_tokens` (SHA-256 del token y familia de rotación), `oauth_states` (state de LinkedIn, un solo uso) y `auth_handoffs` (código de canje) |
-| **Catálogo** | `industries`, `events`, `event_days`, `speakers` y `sessions` (`code` = `evento:día:slot`, como en el frontend) |
-| **Progreso** | `registrations`, `checkins` (con `totem_id` si fue por NFC), `missions`, `mission_progress` y `xp_ledger` (cada XP queda registrado y no se puede sumar dos veces; `users.xp` guarda el total) |
+| **Catálogo** | `industries`, `events` (`owner_id` y `status` `draft`\|`published` para los creados en el panel), `event_days`, `speakers` y `sessions` (`code` = `evento:día:slot`, como en el frontend; `speaker` = ponente) |
+| **Progreso** | `registrations`, `checkins` (con `totem_id` si fue por NFC), `missions` (`kind: "event"` + `event_id` para las de un evento), `mission_progress` y `xp_ledger` (cada XP queda registrado y no se puede sumar dos veces; `users.xp` guarda el total) |
 | **Red** | `contacts` (matches por industria y asistentes de `SUMMIT_POOL`) y `connections`, que apuntan a un contacto (`contact_id`) o a otro usuario (`peer_user_id`); entre usuarios reales hay dos filas espejo |
 | **Cafés y chat** | `coffees` (`invitee_id` NULL si el invitado es del catálogo) y `messages` (un hilo entre usuarios reales reúne las dos filas espejo) |
 | **QR/NFC** | `qr_nonces`: cada token QR se usa una vez y se purga al caducar |
@@ -481,6 +506,7 @@ docker run -p 4000:4000 --env-file .env.production knet-api
 - [x] Cafés 1:1, chat directo, QR dinámico y check-in NFC.
 - [x] Tiempo real (SSE) con reanudación y LISTEN/NOTIFY.
 - [x] Docker, CI, despliegue en Vercel + Neon y migraciones automáticas.
+- [x] Roles de organizador y API para crear, configurar y publicar eventos (`/api/admin/*`).
 - [ ] Verificación de correo y recuperación de contraseña (requiere un proveedor de correo).
 - [ ] Endpoint de administración para que el Responsable consulte y exporte el registro de consentimientos de todos los usuarios.
 - [ ] Purga controlada de los consentimientos desvinculados al vencer el periodo de retención.

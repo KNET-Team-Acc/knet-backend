@@ -53,8 +53,10 @@ console.log(`    ${evs.events.length} eventos · reales: ${evs.events.filter((e)
 await check("solo reales", "GET", "/api/events?kind=real");
 // Catálogo real (issue #16): exactamente los 4 eventos con fuente oficial, sin los retirados
 const REAL_IDS = ["and", "ais", "edu", "adc"];
-const listed = (evs?.events || []).map((e) => e.id).sort();
-if (listed.join() !== [...REAL_IDS].sort().join() || !evs.events.every((e) => e.kind === "real" && e.sourceUrl)) {
+// (los creados por organizadores en el panel, hosted, no son del catálogo sembrado)
+const catalog = (evs?.events || []).filter((e) => !e.hosted);
+const listed = catalog.map((e) => e.id).sort();
+if (listed.join() !== [...REAL_IDS].sort().join() || !catalog.every((e) => e.kind === "real" && e.sourceUrl)) {
   failed++; console.log(`    ✗ /api/events debería traer solo ${REAL_IDS.join(", ")} (reales, con fuente); llegaron: ${listed.join(", ")}`);
 }
 for (const id of REAL_IDS) {
@@ -331,6 +333,100 @@ try { await sql("UPDATE consents SET payload = '{}'::jsonb WHERE id = $1", [kept
 console.log(`    modificar un consentimiento conservado: ${blocked ? "bloqueado" : "PERMITIDO"}`);
 if (!blocked) failed++;
 userId = demoId;
+
+// ───── Panel de creador de eventos (/api/admin/*): roles, borrador → publicado, agenda y misiones ─────
+{
+  const legalUser = async (name, role) => (await sql(
+    `INSERT INTO users (email, name, industry, role, company, legal_version, account_role) VALUES ($1, $2, 'tech', 'Producer', 'KNET Smoke', $3, $4) RETURNING id`,
+    [`smoke.${name.toLowerCase()}.${Date.now()}@knet.local`, `Smoke ${name}`, LEGAL_V, role])).rows[0].id;
+  const orgA = await legalUser("OrgA", "organizer"), orgB = await legalUser("OrgB", "organizer"), att = await legalUser("Asistente", "attendee");
+  token = null;
+  userId = att;
+  const noRole = await check("asistente en /api/admin → 403", "GET", "/api/admin/events", undefined, [403]);
+  if (noRole?.error !== "forbidden_role") { failed++; console.log("    ✗ debería ser forbidden_role"); }
+  token = "no.es.un.jwt";
+  await check("admin con token inválido → 401", "GET", "/api/admin/events", undefined, [401]);
+  token = null;
+
+  userId = orgA;
+  const meOrg = await check("perfil del organizador", "GET", "/api/me");
+  if (meOrg?.user?.accountRole !== "organizer") { failed++; console.log("    ✗ /api/me debería traer accountRole organizer"); }
+  const badEv = await check("crear evento sin nombre válido", "POST", "/api/admin/events", { name: "x", city: "Cali" }, [400]);
+  if (!badEv?.issues?.some((i) => i.path === "name" && /al menos 3/.test(i.message))) { failed++; console.log("    ✗ el error de validación debería estar en español"); }
+  const created = await check("crear borrador", "POST", "/api/admin/events",
+    { name: "Smoke Summit de Datos", city: "Cali", venueName: "Centro de eventos Valle", tags: ["Datos", "IA"], industries: ["tech"],
+      description: "Encuentro de prueba del smoke para equipos de datos." }, [201]);
+  const evId = created?.event?.id;
+  if (!/^o[a-z0-9]{9}$/.test(evId ?? "") || created?.event?.status !== "draft" || !created?.event?.hosted) { failed++; console.log("    ✗ el evento debería nacer como borrador hosted con id o<9>"); }
+  const mine = await check("mis eventos creados", "GET", "/api/admin/events");
+  if (!mine?.events?.some((e) => e.id === evId)) { failed++; console.log("    ✗ el borrador debería aparecer en mis eventos"); }
+  await check("publicar incompleto → 400", "POST", `/api/admin/events/${evId}/publish`, undefined, [400]);
+  userId = att;
+  const pubList = await check("catálogo sin el borrador", "GET", "/api/events");
+  if (pubList?.events?.some((e) => e.id === evId)) { failed++; console.log("    ✗ el borrador no debería salir en /api/events"); }
+  await check("detalle del borrador → 404", "GET", `/api/events/${evId}`, undefined, [404]);
+  await check("inscribirse en un borrador → 404", "POST", `/api/me/registrations/${evId}`, undefined, [404]);
+
+  userId = orgA;
+  await check("días desordenados → 400", "PUT", `/api/admin/events/${evId}/days`, { days: ["2027-05-11", "2027-05-10"] }, [400]);
+  await check("días", "PUT", `/api/admin/events/${evId}/days`, { days: ["2027-05-10", "2027-05-11"] });
+  await check("ficha", "PUT", `/api/admin/events/${evId}/info`, { info: {
+    tone: ["#1E1452", "#0E3A4A"], accent: "#BE82FF", lema: "Datos que se usan", para: "Equipos de datos", formato: ["Presencial", "2 días"],
+    agenda: [["08:00", "Registro", "Entrega de credenciales"]], llevas: ["Casos aplicables"] } });
+  await check("ficha con color inválido → 400", "PUT", `/api/admin/events/${evId}/info`, { info: { tone: ["rojo", "#000"], accent: "#fff", lema: "", para: "", formato: [], agenda: [], llevas: [] } }, [400]);
+  const tpl = await check("plantilla de recinto (and)", "GET", "/api/events/and");
+  await check("recinto 3D", "PUT", `/api/admin/events/${evId}/venue`, { venue: tpl.event.venue });
+  await check("recinto inválido → 400", "PUT", `/api/admin/events/${evId}/venue`, { venue: { ...tpl.event.venue, ent: "NOPE" } }, [400]);
+  const sp = await check("speaker", "POST", `/api/admin/events/${evId}/speakers`, { name: "Laura Gómez", role: "CDO", org: "Datalab", bio: "Lidera datos.", talk: "Gobierno de datos" }, [201]);
+  await check("speaker repetido → 409", "POST", `/api/admin/events/${evId}/speakers`, { name: "Laura Gómez" }, [409]);
+  await check("editar speaker", "PATCH", `/api/admin/events/${evId}/speakers/${sp.speaker.id}`, { org: "Datalab S.A.S." });
+  await check("charla en un día inexistente → 400", "POST", `/api/admin/events/${evId}/sessions`, { day: 5, time: "09:00", kind: "Keynote", title: "Nunca" }, [400]);
+  const s0 = await check("charla día 1", "POST", `/api/admin/events/${evId}/sessions`, { day: 0, time: "10:00", kind: "Keynote", title: "Gobierno de datos en la práctica", room: "Auditorio", speaker: "Laura Gómez", tag: "Datos" }, [201]);
+  await check("otra charla día 1", "POST", `/api/admin/events/${evId}/sessions`, { day: 0, time: "08:30", kind: "Taller", title: "Taller de calidad de datos", room: "Sala 2" }, [201]);
+  await check("charla día 2", "POST", `/api/admin/events/${evId}/sessions`, { day: 1, time: "09:00", kind: "Panel", title: "Panel de IA responsable" }, [201]);
+  await check("charla con hora inválida → 400", "POST", `/api/admin/events/${evId}/sessions`, { day: 0, time: "25:00", kind: "Panel", title: "Hora mala" }, [400]);
+  if (s0?.session?.code !== `${evId}:0:0`) { failed++; console.log("    ✗ la primera charla debería tener el código evento:0:0"); }
+  const mi = await check("misión", "POST", `/api/admin/events/${evId}/missions`, { type: "presencial", title: "Visita la feria de datos", condition: "Escanea el tótem de la feria", xp: 120 }, [201]);
+  await check("misión con XP fuera de rango → 400", "POST", `/api/admin/events/${evId}/missions`, { type: "quiz", title: "Demasiada XP", xp: 9999 }, [400]);
+
+  userId = orgB;
+  await check("otro organizador no lo ve", "GET", `/api/admin/events/${evId}`, undefined, [403]);
+  const notOwner = await check("otro organizador no lo edita", "PATCH", `/api/admin/events/${evId}`, { name: "Robado" }, [403]);
+  if (notOwner?.error !== "not_owner") { failed++; console.log("    ✗ debería ser not_owner"); }
+  await check("otro organizador no lo borra", "DELETE", `/api/admin/events/${evId}`, undefined, [403]);
+
+  userId = orgA;
+  const pub = await check("publicar", "POST", `/api/admin/events/${evId}/publish`);
+  if (pub?.event?.status !== "published" || pub?.event?.counts?.sessions !== 3) { failed++; console.log("    ✗ debería quedar publicado con 3 charlas"); }
+
+  userId = att;
+  const list2 = await check("catálogo con el evento publicado", "GET", "/api/events");
+  if (!list2?.events?.some((e) => e.id === evId && e.hosted && e.days.length === 2)) { failed++; console.log("    ✗ el evento publicado debería salir en /api/events con hosted y 2 días"); }
+  const det = await check("detalle del evento publicado", "GET", `/api/events/${evId}`);
+  if (det?.event?.sessions?.length !== 3 || det?.event?.missions?.length !== 1 || !det?.event?.venue || det?.event?.speakers?.[0]?.org !== "Datalab S.A.S.") {
+    failed++; console.log("    ✗ el detalle debería traer 3 charlas, 1 misión, recinto y el speaker editado");
+  }
+  const day0 = await check("agenda del día 1", "GET", `/api/events/${evId}/sessions?day=0`);
+  if (day0?.sessions?.length !== 2 || !day0.sessions.some((s) => s.speaker === "Laura Gómez")) { failed++; console.log("    ✗ la agenda del día 1 debería tener 2 charlas con su ponente"); }
+  await check("misión del evento sin inscripción → 404", "POST", `/api/me/missions/${mi.mission.code}/complete`, undefined, [404]);
+  await check("inscribirse en el evento creado", "POST", `/api/me/registrations/${evId}`, undefined, [201]);
+  const myMs = await check("mis misiones incluyen la del evento", "GET", "/api/me/missions");
+  if (!myMs?.missions?.some((m) => m.code === mi.mission.code && m.kind === "event" && m.eventId === evId)) { failed++; console.log("    ✗ la misión del evento debería salir para el inscrito"); }
+  const done = await check("completar la misión del evento", "POST", `/api/me/missions/${mi.mission.code}/complete`, undefined, [201]);
+  if (done?.xpAwarded !== 120) { failed++; console.log("    ✗ la misión del evento debería sumar 120 XP"); }
+  await check("check-in en una charla creada", "POST", "/api/me/checkins", { sessionCode: `${evId}:0:0` }, [201]);
+
+  userId = orgA;
+  await check("despublicar", "POST", `/api/admin/events/${evId}/unpublish`);
+  userId = att;
+  await check("despublicado → 404 en el catálogo", "GET", `/api/events/${evId}`, undefined, [404]);
+  userId = orgA;
+  await check("un organizador no borra el catálogo sembrado", "DELETE", "/api/admin/events/and", undefined, [403]);
+  await check("borrar el evento", "DELETE", `/api/admin/events/${evId}`, undefined, [204]);
+  await check("evento borrado → 404", "GET", `/api/admin/events/${evId}`, undefined, [404]);
+  for (const id of [att, orgA, orgB]) { userId = id; await check("limpiar usuario de prueba", "DELETE", "/api/me"); }
+  userId = null;
+}
 
 // ───── Autenticación: registro → login → /api/me con Bearer → refresh rotatorio → logout ─────
 userId = null;

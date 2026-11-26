@@ -4,6 +4,7 @@ import { config } from "./config.js";
 import { errorHandler, notFound } from "./middleware/errors.js";
 import { requireLegal } from "./middleware/legal.js";
 import { resolveUser } from "./middleware/user.js";
+import adminRouter from "./routes/admin/index.js";
 import aiRouter from "./routes/ai.js";
 import authRouter from "./routes/auth.js";
 import contactsRouter from "./routes/contacts.js";
@@ -30,6 +31,7 @@ export function createApp() {
   api.use("/me/stream", streamAuthFromQuery);                   // EventSource: token por query
   api.use("/me", resolveUser(), meRouter);
   api.use("/ai", resolveUser(), requireLegal(), aiRouter);
+  api.use("/admin", resolveUser(), adminRouter);                // panel de creador de eventos: organizer/admin
   app.use("/api", api);
 
   app.use(notFound);

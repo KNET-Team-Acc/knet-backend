@@ -23,6 +23,7 @@ export const toUser = (u, scopes) => ({
   hasPassword: Boolean(u.password_hash),
   legalVersion: u.legal_version ?? null,
   isDemo: u.is_demo,
+  accountRole: u.account_role ?? "attendee", // attendee | organizer | admin (rol de la cuenta, no el cargo)
   xp: u.xp,
   ...levelInfo(u.xp),
   scopes,
@@ -48,6 +49,23 @@ export const toEvent = (e, userXp) => ({
   organizer: e.organizer,
   sourceUrl: e.source_url,
   description: e.description,
+  // Creado por un organizador en KNET (panel /api/admin): su agenda y misiones vienen en GET /api/events/:id
+  hosted: e.owner_id != null,
+});
+
+/** Evento en el panel de creador: con estado, dueño y totales */
+export const toAdminEvent = (e) => ({
+  ...toEvent(e),
+  status: e.status ?? "published",
+  ownerId: e.owner_id ?? null,
+  publishedAt: e.published_at ?? null,
+  counts: { sessions: e.sessions_count ?? 0, speakers: e.speakers_count ?? 0, missions: e.missions_count ?? 0, registrations: e.registrations_count ?? 0 },
+  createdAt: e.created_at,
+  updatedAt: e.updated_at,
+});
+
+export const toAdminSpeaker = (s) => ({
+  id: s.id, name: s.name, role: s.role, org: s.org, session: s.session_label, talk: s.talk, bio: s.bio, tags: s.tags, avatar: s.avatar,
 });
 
 export const toSession = (s) => ({
@@ -62,8 +80,11 @@ export const toSession = (s) => ({
   tag: s.tag,
   why: s.why,
   industry: s.industry,
+  speaker: s.speaker || "",
   checkedIn: s.checked_in,
 });
+
+export const toAdminSession = (s) => ({ id: s.id, ...toSession(s), checkedIn: undefined });
 
 export const toCheckin = (c) => ({
   id: c.id,
@@ -85,6 +106,7 @@ export const toMission = (m) => ({
   subtitle: m.subtitle,
   xp: m.xp,
   tags: m.tags,
+  eventId: m.event_id ?? null,
   completed: Boolean(m.completed_at),
   completedAt: m.completed_at ?? null,
 });

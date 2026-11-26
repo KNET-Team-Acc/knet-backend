@@ -73,7 +73,8 @@ async function seedEvents(c) {
  */
 async function retireEvents(c) {
   const ids = EVENTS.map((e) => e.id);
-  const { rows: gone } = await c.query("SELECT id FROM events WHERE NOT (id = ANY ($1))", [ids]);
+  // Solo los del catálogo: los eventos que crean los organizadores en el panel (owner_id) no se retiran
+  const { rows: gone } = await c.query("SELECT id FROM events WHERE owner_id IS NULL AND NOT (id = ANY ($1))", [ids]);
   for (const { id } of gone) {
     const to = EV_ALIAS[id];
     if (to && ids.includes(to)) {

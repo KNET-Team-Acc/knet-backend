@@ -16,7 +16,8 @@ router.get("/", async (req, res) => {
 
 // POST /api/me/registrations/:eventId → inscribirse (respeta los eventos exclusivos por nivel)
 router.post("/:eventId", async (req, res) => {
-  const { rows: [ev] } = await query("SELECT id, name, min_level FROM events WHERE id = $1", [req.params.eventId]);
+  // Los borradores del panel de creador no admiten inscripciones hasta publicarse
+  const { rows: [ev] } = await query("SELECT id, name, min_level FROM events WHERE id = $1 AND status = 'published'", [req.params.eventId]);
   if (!ev) throw new HttpError(404, `No existe el evento ${req.params.eventId}`);
   const { level } = levelInfo(req.user.xp);
   if (level < ev.min_level) throw new HttpError(403, `«${ev.name}» es exclusivo del nivel ${ev.min_level}; vas en el nivel ${level}`);
