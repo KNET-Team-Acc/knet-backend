@@ -66,7 +66,9 @@ export const venueSchema = z.object({
     aisle: num.positive(),
     ent: z.string().max(8),
     totems: z.array(z.string().max(8)).max(20),
-    deco: z.array(z.unknown()).max(40).optional(),
+    // Decoración del recinto 3D: palabras clave («palms water-front», «lamps») y, con palms, dónde van las palmeras
+    deco: z.union([z.string().max(80), z.array(z.unknown()).max(40)]).optional(),
+    palms: z.array(point).max(60).optional(),
     nodes: z.record(z.string().max(8), point),
     edges: z.array(z.tuple([z.string().max(8), z.string().max(8)])).max(60),
     z: z.array(zone).min(1, "El recinto necesita al menos una zona").max(12),
