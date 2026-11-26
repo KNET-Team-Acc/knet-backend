@@ -5,6 +5,8 @@
  * Se puede repetir: los check-ins/misiones ya hechos devuelven 409 y cuentan como OK.
  */
 import "dotenv/config";
+import { isDeepStrictEqual } from "node:util";
+import { VENUES } from "../db/data/venues.js";
 
 const BASE = process.env.API_URL || `http://localhost:${process.env.PORT || 4000}`;
 let userId = null;
@@ -59,12 +61,19 @@ const listed = catalog.map((e) => e.id).sort();
 if (listed.join() !== [...REAL_IDS].sort().join() || !catalog.every((e) => e.kind === "real" && e.sourceUrl)) {
   failed++; console.log(`    ✗ /api/events debería traer solo ${REAL_IDS.join(", ")} (reales, con fuente); llegaron: ${listed.join(", ")}`);
 }
+const venues = {};
 for (const id of REAL_IDS) {
   const d = await check(`detalle ${id}`, "GET", `/api/events/${id}`);
   if (d?.event?.id !== id || !d.event.info || !d.event.venue || !Array.isArray(d.event.speakers)) {
     failed++; console.log(`    ✗ el detalle de ${id} debería traer ficha, recinto y speakers`);
   }
+  venues[id] = d?.event?.venue;
+  if (!isDeepStrictEqual(venues[id], VENUES[id])) { failed++; console.log(`    ✗ el recinto de ${id} no coincide con db/data/venues.js (¿falta db:seed?)`); }
 }
+// Multievento (issue #20): cada evento real tiene su propio escenario 3D/AR, no una copia del plano de otro
+const layout = (v) => JSON.stringify(v && [v.floor, v.nodes, v.edges, v.ground, v.deco]);
+const shared = REAL_IDS.filter((a, i) => REAL_IDS.some((b, j) => j > i && layout(venues[a]) === layout(venues[b])));
+if (shared.length) { failed++; console.log(`    ✗ recintos con la misma distribución: ${shared.join(", ")}`); }
 for (const id of ["bog", "med", "baq", "x2", "x3", "x4", "x5"]) await check(`retirado ${id}`, "GET", `/api/events/${id}`, undefined, [404]);
 await check("evento sin días publicados", "GET", "/api/events/ais/sessions?day=0", undefined, [404]);
 const ses = await check("sesiones and día 0", "GET", "/api/events/and/sessions?day=0");
