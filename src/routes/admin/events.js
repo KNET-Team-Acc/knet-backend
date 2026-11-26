@@ -29,16 +29,23 @@ const ADMIN_SELECT = `
          (SELECT count(*) FROM sessions s WHERE s.event_id = e.id)::int AS sessions_count,
          (SELECT count(*) FROM speakers p WHERE p.event_id = e.id)::int AS speakers_count,
          (SELECT count(*) FROM missions m WHERE m.event_id = e.id)::int AS missions_count,
-         (SELECT count(*) FROM registrations r WHERE r.event_id = e.id)::int AS registrations_count
+         (SELECT count(*) FROM registrations r WHERE r.event_id = e.id)::int AS registrations_count,
+         o.name AS owner_name, o.email AS owner_email
     FROM events e
+    LEFT JOIN users o ON o.id = e.owner_id
     LEFT JOIN LATERAL (SELECT array_agg(date::text ORDER BY day_index) AS days
                          FROM event_days WHERE event_id = e.id) d ON true`;
 
-/** Evento que el usuario puede editar (FOR UPDATE dentro de una transacción). 404 si no existe, 403 si es de otro. */
+/**
+ * Evento que el usuario puede ver (lectura) o editar (lock: FOR UPDATE dentro de una transacción).
+ * 404 si no existe, 403 not_owner si es de otro organizador (un admin ve y edita los de todos).
+ * Los del catálogo sembrado (owner_id NULL) son de solo lectura: db:seed los reescribe en cada despliegue → 409 catalog_event.
+ */
 async function editable(db, id, user, { lock = false } = {}) {
   const { rows: [ev] } = await db.query(`SELECT id, owner_id, status FROM events WHERE id = $1${lock ? " FOR UPDATE" : ""}`, [id]);
   if (!ev) throw new HttpError(404, `No existe el evento ${id}`);
   if (!isAdmin(user) && ev.owner_id !== user.id) throw new HttpError(403, "Solo puedes editar los eventos que creaste", "not_owner");
+  if (lock && !ev.owner_id) throw new HttpError(409, "Los eventos del catálogo se gestionan con el seed (db/data/) y no se editan desde el panel", "catalog_event");
   return ev;
 }
 
@@ -82,11 +89,11 @@ const COLUMNS = {
 
 /* ───────────── Eventos ───────────── */
 
-// GET /api/admin/events → los míos (admin: ?all=1 para ver todos, incluidos los del catálogo)
+// GET /api/admin/events → los míos (admin: ?all=1 para ver los de todos los organizadores y, al final, los del catálogo)
 router.get("/", async (req, res) => {
   const all = isAdmin(req.user) && ["1", "true"].includes(String(req.query.all));
   const { rows } = await query(
-    `${ADMIN_SELECT} WHERE ($1::boolean OR e.owner_id = $2) ORDER BY e.updated_at DESC, e.id`, [all, req.user.id]);
+    `${ADMIN_SELECT} WHERE ($1::boolean OR e.owner_id = $2) ORDER BY (e.owner_id IS NULL), e.updated_at DESC, e.id`, [all, req.user.id]);
   res.json({ events: rows.map(toAdminEvent), role: accountRoleOf(req.user) });
 });
 
@@ -136,7 +143,6 @@ router.patch("/:id", async (req, res) => {
 router.delete("/:id", async (req, res) => {
   await tx(async (c) => {
     const ev = await editable(c, req.params.id, req.user, { lock: true });
-    if (!ev.owner_id) throw new HttpError(409, "Los eventos del catálogo se retiran con el seed, no desde el panel", "catalog_event");
     await c.query("DELETE FROM events WHERE id = $1", [ev.id]);
   });
   res.status(204).end();
@@ -202,7 +208,6 @@ router.post("/:id/publish", async (req, res) => {
 router.post("/:id/unpublish", async (req, res) => {
   const ev = await tx(async (c) => {
     const e = await editable(c, req.params.id, req.user, { lock: true });
-    if (!e.owner_id) throw new HttpError(409, "Los eventos del catálogo no se pueden despublicar", "catalog_event");
     await c.query("UPDATE events SET status = 'draft' WHERE id = $1", [e.id]);
     return detail(c, e.id);
   });

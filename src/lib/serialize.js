@@ -58,6 +58,9 @@ export const toAdminEvent = (e) => ({
   ...toEvent(e),
   status: e.status ?? "published",
   ownerId: e.owner_id ?? null,
+  // Quién lo creó (lo usa el admin, que ve los de todos) y si es del catálogo sembrado (solo lectura en el panel)
+  owner: e.owner_id ? { id: e.owner_id, name: e.owner_name ?? null, email: e.owner_email ?? null } : null,
+  catalog: !e.owner_id,
   publishedAt: e.published_at ?? null,
   counts: { sessions: e.sessions_count ?? 0, speakers: e.speakers_count ?? 0, missions: e.missions_count ?? 0, registrations: e.registrations_count ?? 0 },
   createdAt: e.created_at,

@@ -340,6 +340,7 @@ userId = demoId;
     `INSERT INTO users (email, name, industry, role, company, legal_version, account_role) VALUES ($1, $2, 'tech', 'Producer', 'KNET Smoke', $3, $4) RETURNING id`,
     [`smoke.${name.toLowerCase()}.${Date.now()}@knet.local`, `Smoke ${name}`, LEGAL_V, role])).rows[0].id;
   const orgA = await legalUser("OrgA", "organizer"), orgB = await legalUser("OrgB", "organizer"), att = await legalUser("Asistente", "attendee");
+  const adm = await legalUser("Admin", "admin");
   token = null;
   userId = att;
   const noRole = await check("asistente en /api/admin → 403", "GET", "/api/admin/events", undefined, [403]);
@@ -416,6 +417,25 @@ userId = demoId;
   if (done?.xpAwarded !== 120) { failed++; console.log("    ✗ la misión del evento debería sumar 120 XP"); }
   await check("check-in en una charla creada", "POST", "/api/me/checkins", { sessionCode: `${evId}:0:0` }, [201]);
 
+  // Admin: ve los eventos de todos los organizadores (con su dueño) y los del catálogo (solo lectura)
+  userId = orgB;
+  const onlyMine = await check("un organizador con ?all=1 solo ve los suyos", "GET", "/api/admin/events?all=1");
+  if (onlyMine?.events?.some((e) => e.id === evId || e.catalog)) { failed++; console.log("    ✗ ?all=1 solo aplica a los admin"); }
+  userId = adm;
+  const all = await check("admin: todos los eventos", "GET", "/api/admin/events?all=1");
+  const other = all?.events?.find((e) => e.id === evId), cat = all?.events?.find((e) => e.id === "and");
+  if (other?.owner?.name !== "Smoke OrgA" || other?.catalog !== false || cat?.catalog !== true || cat?.owner !== null) {
+    failed++; console.log("    ✗ el admin debería ver el evento de OrgA con su dueño y los del catálogo marcados");
+  }
+  const admMine = await check("admin sin ?all: solo los suyos", "GET", "/api/admin/events");
+  if (admMine?.events?.length !== 0) { failed++; console.log("    ✗ sin ?all=1 el admin solo ve los que creó"); }
+  const admEdit = await check("admin edita el evento de otro organizador", "PATCH", `/api/admin/events/${evId}`, { venueName: "Centro de eventos (editado por admin)" });
+  if (admEdit?.event?.venueName !== "Centro de eventos (editado por admin)" || admEdit?.event?.owner?.name !== "Smoke OrgA") { failed++; console.log("    ✗ la edición del admin debería guardarse sin cambiar el dueño"); }
+  await check("admin agrega una charla a ese evento", "POST", `/api/admin/events/${evId}/sessions`, { day: 1, time: "11:00", kind: "Charla", title: "Charla agregada por el admin" }, [201]);
+  await check("admin lee un evento del catálogo", "GET", "/api/admin/events/and");
+  const catEdit = await check("admin no edita el catálogo sembrado", "PATCH", "/api/admin/events/and", { name: "Cambiado" }, [409]);
+  if (catEdit?.error !== "catalog_event") { failed++; console.log("    ✗ debería ser catalog_event"); }
+
   userId = orgA;
   await check("despublicar", "POST", `/api/admin/events/${evId}/unpublish`);
   userId = att;
@@ -424,7 +444,7 @@ userId = demoId;
   await check("un organizador no borra el catálogo sembrado", "DELETE", "/api/admin/events/and", undefined, [403]);
   await check("borrar el evento", "DELETE", `/api/admin/events/${evId}`, undefined, [204]);
   await check("evento borrado → 404", "GET", `/api/admin/events/${evId}`, undefined, [404]);
-  for (const id of [att, orgA, orgB]) { userId = id; await check("limpiar usuario de prueba", "DELETE", "/api/me"); }
+  for (const id of [att, orgA, orgB, adm]) { userId = id; await check("limpiar usuario de prueba", "DELETE", "/api/me"); }
   userId = null;
 }
 
