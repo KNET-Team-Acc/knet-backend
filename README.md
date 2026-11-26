@@ -285,13 +285,13 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 <details>
 <summary><b>Panel de creador de eventos (organizer / admin)</b></summary>
 
-Solo cuentas con `accountRole` `organizer` o `admin` (`npm run user:role`). Sin rol: 403 `forbidden_role`; sin sesión: 401. Un organizador solo ve y edita sus eventos (403 `not_owner`); un admin, todos. Los errores de validación son 400 `validation_error` con `issues[]` en español.
+Solo cuentas con `accountRole` `organizer` o `admin` (`npm run user:role`). Sin rol: 403 `forbidden_role`; sin sesión: 401. Un organizador solo ve y edita sus eventos (403 `not_owner`); un admin ve y edita los de todos los organizadores. Los del catálogo sembrado son de solo lectura (409 `catalog_event`), porque `db:seed` los reescribe en cada despliegue. Los errores de validación son 400 `validation_error` con `issues[]` en español.
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/admin/events` | Mis eventos creados con `status` (`draft`\|`published`) y `counts` (admin: `?all=1` para ver todos) |
+| GET | `/api/admin/events` | Mis eventos creados con `status` (`draft`\|`published`), `counts` y `owner` (admin: `?all=1` para ver los de todos los organizadores y, al final, los del catálogo con `catalog: true`) |
 | POST | `/api/admin/events` | `{ name, city, venueName?, dateLabel?, lat?, lon?, tags?, industries?, description?, sourceUrl?, organizer? }` → 201 borrador con id `o<9>` |
-| GET / PATCH / DELETE | `/api/admin/events/:id` | Detalle completo (ficha, recinto, días, speakers, charlas y misiones), editar los datos básicos o borrar (los del catálogo sembrado: 409 `catalog_event`) |
+| GET / PATCH / DELETE | `/api/admin/events/:id` | Detalle completo (ficha, recinto, días, speakers, charlas y misiones), editar los datos básicos o borrar |
 | PUT | `/api/admin/events/:id/days` | `{ days: ["AAAA-MM-DD", …] }` en orden. Quitar un día borra sus charlas |
 | PUT | `/api/admin/events/:id/info` | `{ info: { tone: [hex, hex], accent, lema, para, formato[], agenda: [[hora, título, detalle]], llevas[] } }` (forma de `EV_INFO`) |
 | PUT | `/api/admin/events/:id/venue` | `{ venue }` con la forma de `VENUES` (zonas, nodos y pasillos); `null` lo quita |
