@@ -43,7 +43,7 @@ router.get("/:id", async (req, res) => {
     `SELECT name, role, org, session_label AS "session", talk, bio, tags, avatar
        FROM speakers WHERE event_id = $1 ORDER BY id`, [ev.id]);
   const event = { ...toEvent(ev, req.user?.xp), info: ev.info, venue: ev.venue, speakers };
-  if (ev.owner_id) {
+  if (ev.owner_id && !ev.curated) {
     const [{ rows: sessions }, { rows: missions }] = await Promise.all([
       query("SELECT * FROM sessions WHERE event_id = $1 AND industry IS NULL ORDER BY day_index, start_time, slot", [ev.id]),
       query("SELECT * FROM missions WHERE event_id = $1 ORDER BY sort_order, code", [ev.id]),

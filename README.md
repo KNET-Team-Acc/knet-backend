@@ -205,7 +205,7 @@ knet-backend/
 │   └── lib/                     # auth, xp, levels, qr, consents, checkins, threads, agenda,
 │                                # dossier, ai, events-bus, queries, serialize, http
 ├── db/
-│   ├── migrations/              # 001_init … 006_roles (SQL numerado; nunca se editan)
+│   ├── migrations/              # 001_init … 007_curated (SQL numerado; nunca se editan)
 │   ├── data/                    # Copia de src/data/ del frontend (catálogo del seed)
 │   ├── migrate.js · seed.js
 ├── scripts/                     # smoke, ai-mock, linkedin-mock, stream-test, agenda-parity, set-role
@@ -305,6 +305,9 @@ La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id
 | PATCH / DELETE | `/api/admin/events/:id/missions/:code` | Editar o quitar una misión |
 | POST | `/api/admin/events/:id/publish` | Lo publica en `GET /api/events`. 400 `incomplete_event` con `missing[]` si falta un día, una charla, la ficha o la descripción |
 | POST | `/api/admin/events/:id/unpublish` | Vuelve a borrador |
+| POST | `/api/admin/ai/assist` | Asistente de IA del panel: `{ message, history?, eventId?, focus?: "venue", lang? }` → `{ reply, proposals: { details, agenda, sessions, speakers, missions, venue: { zones } } }`. Solo propone (recortado a lo que aceptan los endpoints de arriba); no guarda nada. Sin IA → 503 `ai_unavailable`; rate limit por usuario |
+
+**Eventos del catálogo añadidos por un admin:** `POST /api/admin/events` con `curated: true` (solo admin; si no, 403 `forbidden_role`) crea un evento real externo. No es `hosted` (el frontend arma su agenda como la de los sembrados), no necesita charlas para publicarse pero sí `sourceUrl` (su web oficial), y como tiene `owner_id` `db:seed` no lo retira.
 
 </details>
 
@@ -404,7 +407,7 @@ es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)
 
 ## Modelo de datos
 
-Seis migraciones en `db/migrations/`: `001_init`, `002_user_erasure`, `003_auth`, `004_coffees_messages`, `005_qr_nfc` y `006_roles`.
+Siete migraciones en `db/migrations/`: `001_init`, `002_user_erasure`, `003_auth`, `004_coffees_messages`, `005_qr_nfc`, `006_roles` y `007_curated` (eventos reales que un admin añade al catálogo).
 
 ```mermaid
 erDiagram
