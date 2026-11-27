@@ -6,31 +6,47 @@ import { pool, query, tx } from "../../db.js";
 import { HttpError } from "../../lib/http.js";
 import { levelInfo, XP_REWARDS } from "../../lib/levels.js";
 import { publish } from "../../lib/events-bus.js";
+import { CONN_SELECT as SELECT, acceptPeer, checkPeer, fetchConnections, removePendingPeer, requestPeer } from "../../lib/peers.js";
 import { consumeNonce, verifyQrToken } from "../../lib/qr.js";
 import { getScopes } from "../../lib/queries.js";
-import { denyAdmin } from "../../middleware/roles.js";
+import { accountRoleOf, denyAdmin } from "../../middleware/roles.js";
 import { toConnection } from "../../lib/serialize.js";
 import { awardXp } from "../../lib/xp.js";
 
 const router = Router();
 
-const SELECT = `
-  SELECT cn.id, cn.status, cn.source, cn.context, cn.event_id, cn.created_at, cn.accepted_at,
-         to_jsonb(ct) AS contact,
-         CASE WHEN pu.id IS NOT NULL THEN jsonb_build_object(
-           'id', pu.id, 'name', pu.name, 'role', pu.role, 'company', pu.company, 'industry', pu.industry) END AS peer
-    FROM connections cn
-    LEFT JOIN contacts ct ON ct.id = cn.contact_id
-    LEFT JOIN users pu ON pu.id = cn.peer_user_id`;
-
 const postSchema = z.object({
   contactId: z.number().int().positive().optional(),
   name: z.string().trim().min(1).max(120).optional(),
-  // qr: intercambio en persona (queda aceptada); request/match: solicitud pendiente
+  // Otro usuario real (directorio del evento): solicitud pendiente hasta que la acepte (knet-backend#24)
+  peerUserId: z.string().uuid().optional(),
+  // qr: intercambio en persona con un contacto del catálogo (queda aceptada); request/match: solicitud pendiente
   source: z.enum(["request", "match", "qr"]).default("request"),
   context: z.string().trim().max(280).optional(),
   eventId: z.string().max(40).optional(),
-}).strict().refine((o) => o.contactId || o.name, "Envía contactId o name");
+}).strict()
+  .refine((o) => [o.contactId, o.name, o.peerUserId].filter((x) => x !== undefined).length === 1, "Envía contactId, name o peerUserId")
+  .refine((o) => !o.peerUserId || o.source === "request", "Con peerUserId, source debe ser «request»");
+
+const perUser = (limit, message) => rateLimit({
+  windowMs: 60_000,
+  limit,
+  keyGenerator: (req) => req.user.id,
+  standardHeaders: "draft-8",
+  legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({ error: "rate_limited", message }),
+});
+// Solo las solicitudes a usuarios reales: las del catálogo las genera la app y no molestan a nadie
+const requestLimiter = perUser(config.connections.requestRateLimit, "Demasiadas solicitudes: espera un minuto");
+const peerOnly = (mw) => (req, res, next) => (req.body?.peerUserId ? mw(req, res, next) : next());
+
+/* Publica en el bus (después del commit) las filas espejo de una solicitud entre usuarios reales */
+async function publishPair(type, me, peer, mineId, theirsId) {
+  const rows = await fetchConnections(pool, [mineId, theirsId]);
+  if (rows.get(mineId)) publish(me, type, { connection: toConnection(rows.get(mineId)) });
+  if (rows.get(theirsId)) publish(peer, type, { connection: toConnection(rows.get(theirsId)) });
+  return rows.get(mineId) ? toConnection(rows.get(mineId)) : null;
+}
 
 // GET /api/me/connections?status=accepted
 router.get("/", async (req, res) => {
@@ -42,8 +58,9 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/me/connections
-router.post("/", async (req, res) => {
+router.post("/", peerOnly(requestLimiter), async (req, res) => {
   const body = postSchema.parse(req.body ?? {});
+  if (body.peerUserId) return requestFromDirectory(req, res, body);
   const scopes = await getScopes(pool, req.user.id);
   if (!scopes.network) throw new HttpError(403, "Revocaste el permiso «network»: actívalo para sumar contactos");
 
@@ -76,26 +93,28 @@ router.post("/", async (req, res) => {
   res.status(201).json({ connection, ...result.xp, ...levelInfo(result.xp.xp) });
 });
 
-const scanLimiter = rateLimit({
-  windowMs: 60_000,
-  limit: config.qr.scanRateLimit,
-  keyGenerator: (req) => req.user.id,
-  standardHeaders: "draft-8",
-  legacyHeaders: false,
-  handler: (_req, res) => res.status(429).json({ error: "rate_limited", message: "Demasiados escaneos: espera un minuto" }),
-});
+/* POST /api/me/connections { peerUserId, eventId?, context? }: solicitud a otro usuario real.
+   201 pendiente (sin XP), 409 request_pending / already_connected; si la otra persona ya te la había pedido,
+   quedan conectados (200, +100 XP a cada uno). La recibe en vivo por connection.request (direction incoming). */
+async function requestFromDirectory(req, res, body) {
+  if (accountRoleOf(req.user) === "admin") throw new HttpError(403, "Las cuentas admin no participan como asistentes", "admin_account");
+  const me = req.user.id, peer = body.peerUserId;
+  const r = await tx(async (c) => {
+    await checkPeer(c, me, peer, { eventId: body.eventId ?? null });
+    return requestPeer(c, me, peer, { source: "request", context: body.context ?? "", eventId: body.eventId ?? null });
+  });
+  if (r.outcome === "pending") throw new HttpError(409, "Ya le enviaste una solicitud a esta persona", "request_pending");
+  if (r.outcome === "connected") throw new HttpError(409, "Ya están conectados", "already_connected");
+  const connection = await publishPair(r.outcome === "accepted" ? "connection.accepted" : "connection.request", me, peer, r.mineId, r.theirsId);
+  res.status(r.outcome === "created" ? 201 : 200).json({ connection, ...r.xp, ...levelInfo(r.xp.xp) });
+}
 
-// Crea o reactiva la fila de un lado de la conexión entre usuarios reales
-const UPSERT_PEER = `
-  INSERT INTO connections (user_id, peer_user_id, status, source, context, event_id, accepted_at)
-  VALUES ($1, $2, 'accepted', 'qr', $3, (SELECT id FROM events WHERE id = $4), now())
-  ON CONFLICT (user_id, peer_user_id) DO UPDATE
-    SET status = 'accepted', accepted_at = COALESCE(connections.accepted_at, now())
-  RETURNING id, (xmax = 0) AS created`;
+const scanLimiter = perUser(config.qr.scanRateLimit, "Demasiados escaneos: espera un minuto");
 
 // POST /api/me/connections/scan { token, context? } → escanea el QR dinámico de otro asistente.
-// Crea la conexión en ambos sentidos (aceptada) y suma +100 XP a cada uno una sola vez (ref conn:<uuid>).
-// 400 invalid_qr / qr_expired / own_qr, 409 qr_used (cada token sirve una vez), 429 si se abusa.
+// Crea una solicitud pendiente hacia el dueño del QR (knet-backend#24): +100 XP a cada uno solo cuando la acepte.
+// 201 solicitud nueva; 200 si ya estaban conectados, ya se la habías pedido o la otra persona te la había pedido
+// (en ese caso quedan conectados con su XP). 400 invalid_qr / qr_expired / own_qr, 409 qr_used, 429 si se abusa.
 router.post("/scan", denyAdmin(), scanLimiter, async (req, res) => {
   const body = z.object({
     token: z.string().min(1).max(1000),
@@ -103,33 +122,22 @@ router.post("/scan", denyAdmin(), scanLimiter, async (req, res) => {
   }).strict().parse(req.body ?? {});
   const qr = verifyQrToken(body.token);
   if (qr.userId === req.user.id) throw new HttpError(400, "No puedes escanear tu propio código", "own_qr");
+  const me = req.user.id;
 
   const result = await tx(async (c) => {
     const { rows: [owner] } = await c.query("SELECT id FROM users WHERE id = $1", [qr.userId]);
     if (!owner) throw new HttpError(400, "El código QR no es válido", "invalid_qr");
-    if (!(await getScopes(c, req.user.id)).network) {
-      throw new HttpError(403, "Revocaste el permiso «network»: actívalo para sumar contactos");
-    }
-    if (!(await getScopes(c, owner.id)).network) {
-      throw new HttpError(403, "Esta persona no está compartiendo su red", "peer_network_off");
-    }
-    await consumeNonce(c, qr, req.user.id);
-    const context = body.context ?? "";
-    const { rows: [mine] } = await c.query(UPSERT_PEER, [req.user.id, owner.id, context, qr.eventId]);
-    const { rows: [theirs] } = await c.query(UPSERT_PEER, [owner.id, req.user.id, context, qr.eventId]);
-    const xp = await awardXp(c, req.user.id, XP_REWARDS.connection, "connection", `conn:${owner.id}`);
-    await awardXp(c, owner.id, XP_REWARDS.connection, "connection", `conn:${req.user.id}`);
-    const { rows: [rowMine] } = await c.query(`${SELECT} WHERE cn.id = $1`, [mine.id]);
-    const { rows: [rowTheirs] } = await c.query(`${SELECT} WHERE cn.id = $1`, [theirs.id]);
-    return { rowMine, rowTheirs, ownerId: owner.id, created: mine.created || theirs.created, xp };
+    await checkPeer(c, me, owner.id, { inPerson: true }); // en persona: no exige un evento en común
+    await consumeNonce(c, qr, me);
+    return { ownerId: owner.id, ...(await requestPeer(c, me, owner.id, { source: "qr", context: body.context ?? "", eventId: qr.eventId })) };
   });
 
-  const connection = toConnection(result.rowMine);
-  if (result.created) {
-    publish(req.user.id, "connection.accepted", { connection });
-    publish(result.ownerId, "connection.accepted", { connection: toConnection(result.rowTheirs) });
-  }
-  res.status(result.created ? 201 : 200).json({ connection, created: result.created, ...result.xp, ...levelInfo(result.xp.xp) });
+  const created = result.outcome === "created";
+  const type = result.outcome === "accepted" ? "connection.accepted" : result.outcome === "created" ? "connection.request" : null;
+  const connection = type
+    ? await publishPair(type, me, result.ownerId, result.mineId, result.theirsId)
+    : toConnection((await fetchConnections(pool, [result.mineId])).get(result.mineId));
+  res.status(created ? 201 : 200).json({ connection, created, ...result.xp, ...levelInfo(result.xp.xp) });
 });
 
 const idParam = z.coerce.number().int().positive();
@@ -137,10 +145,23 @@ const idParam = z.coerce.number().int().positive();
 // Referencia de XP: id del contacto del catálogo, o conn:<uuid> si es otro usuario real
 export const connectionXpRef = (cn) => (cn.contact_id != null ? String(cn.contact_id) : `conn:${cn.peer_user_id}`);
 
-// PATCH /api/me/connections/:id { status: "accepted" } → acepta una solicitud pendiente (+100 XP una sola vez)
+// PATCH /api/me/connections/:id { status: "accepted" } → acepta una solicitud pendiente (+100 XP una sola vez).
+// Entre usuarios reales solo la acepta quien la recibió (403 not_recipient) y se aceptan las dos filas espejo.
 router.patch("/:id", async (req, res) => {
   const id = idParam.parse(req.params.id);
   z.object({ status: z.literal("accepted") }).strict().parse(req.body ?? {});
+  const { rows: [own] } = await query("SELECT id, peer_user_id FROM connections WHERE id = $1 AND user_id = $2", [id, req.user.id]);
+  if (!own) throw new HttpError(404, `No existe la conexión ${id}`);
+
+  if (own.peer_user_id) {
+    const me = req.user.id, peer = own.peer_user_id;
+    const r = await tx((c) => acceptPeer(c, me, peer));
+    const connection = r.changed
+      ? await publishPair("connection.accepted", me, peer, r.mineId, r.theirsId)
+      : toConnection((await fetchConnections(pool, [r.mineId])).get(r.mineId));
+    return res.json({ connection, ...r.xp, ...levelInfo(r.xp.xp) });
+  }
+
   const result = await tx(async (c) => {
     const { rows: [cn] } = await c.query(
       "SELECT id, contact_id, peer_user_id, status FROM connections WHERE id = $1 AND user_id = $2 FOR UPDATE", [id, req.user.id]);
@@ -159,9 +180,22 @@ router.patch("/:id", async (req, res) => {
   res.json({ connection, ...result.xp, ...levelInfo(result.xp.xp) });
 });
 
-// DELETE /api/me/connections/:id → quita la conexión (la XP ya ganada se conserva)
+// DELETE /api/me/connections/:id → quita la conexión (la XP ya ganada se conserva).
+// Una solicitud pendiente entre usuarios reales se rechaza o cancela: se borran las dos filas espejo y las dos
+// partes reciben connection.removed { connectionId (el de su fila), peerUserId, reason: declined | cancelled }.
 router.delete("/:id", async (req, res) => {
   const id = idParam.parse(req.params.id);
+  const { rows: [own] } = await query("SELECT id, peer_user_id, status FROM connections WHERE id = $1 AND user_id = $2", [id, req.user.id]);
+  if (!own) throw new HttpError(404, `No existe la conexión ${id}`);
+
+  if (own.peer_user_id && own.status === "pending") {
+    const me = req.user.id, peer = own.peer_user_id;
+    const r = await tx((c) => removePendingPeer(c, me, peer));
+    publish(me, "connection.removed", { connectionId: r.mineId, peerUserId: peer, reason: r.reason });
+    if (r.theirsId) publish(peer, "connection.removed", { connectionId: r.theirsId, peerUserId: me, reason: r.reason });
+    return res.status(204).end();
+  }
+
   const { rowCount } = await query("DELETE FROM connections WHERE id = $1 AND user_id = $2", [id, req.user.id]);
   if (!rowCount) throw new HttpError(404, `No existe la conexión ${id}`);
   res.status(204).end();

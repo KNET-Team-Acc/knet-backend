@@ -168,7 +168,7 @@ const noMsg = await check("mensaje con conexión pendiente → 403", "POST", `/a
 if (noCafe?.error !== "not_connected" || noMsg?.error !== "not_connected") { failed++; console.log("    ✗ debería ser not_connected"); }
 await check("quitar solicitud pendiente", "DELETE", `/api/me/connections/${pend.connection.id}`, undefined, [204]);
 
-// Entre usuarios reales: dos filas espejo, creadas al escanear el QR dinámico del otro.
+// Entre usuarios reales: dos filas espejo. Escanear el QR del otro las crea pendientes; aceptar las conecta.
 const LEGAL_V = process.env.LEGAL_VERSION || "1.2";
 const realUser = async (name) => (await sql(
   `INSERT INTO users (email, name, industry, role, company, legal_version) VALUES ($1, $2, 'tech', 'CTO', 'Acme', $3) RETURNING id`,
@@ -186,9 +186,11 @@ const bad = await check("token alterado", "POST", "/api/me/connections/scan", { 
 const { signQrToken } = await import("../src/lib/qr.js");
 const old = await check("token caducado", "POST", "/api/me/connections/scan", { token: signQrToken({ userId: beto }, Date.now() - 600_000).token }, [400]);
 if (ownQr?.error !== "own_qr" || bad?.error !== "invalid_qr" || old?.error !== "qr_expired") { failed++; console.log("    ✗ errores esperados: own_qr, invalid_qr, qr_expired"); }
-const sc = await check("Ana escanea a Beto", "POST", "/api/me/connections/scan", { token: qrB.token, context: "Charla de RAG" }, [201]);
-if (sc?.xpAwarded !== 100 || !sc?.created || sc?.connection?.contact?.userId !== beto || sc?.connection?.eventId !== "and") {
-  failed++; console.log("    ✗ el escaneo debería crear la conexión con Beto (+100 XP)");
+// knet-backend#24: escanear crea una solicitud pendiente hacia el dueño del QR; la XP llega cuando la acepta
+const sc = await check("Ana escanea a Beto (solicitud)", "POST", "/api/me/connections/scan", { token: qrB.token, context: "Charla de RAG" }, [201]);
+if (sc?.xpAwarded !== 0 || !sc?.created || sc?.connection?.status !== "pending" || sc?.connection?.direction !== "outgoing"
+    || sc?.connection?.contact?.userId !== beto || sc?.connection?.eventId !== "and") {
+  failed++; console.log("    ✗ el escaneo debería crear una solicitud pendiente hacia Beto, sin XP");
 }
 const used = await check("token ya usado", "POST", "/api/me/connections/scan", { token: qrB.token }, [409]);
 if (used?.error !== "qr_used") { failed++; console.log("    ✗ debería ser qr_used"); }
@@ -196,13 +198,76 @@ userId = beto;
 const qrB2 = await check("nuevo token de Beto", "GET", "/api/me/qr-token");
 userId = ana;
 const sc2 = await check("escanear de nuevo a Beto", "POST", "/api/me/connections/scan", { token: qrB2.token }, [200]);
-const { rows: [{ xp: betoXp }] } = await sql("SELECT xp FROM users WHERE id = $1", [beto]);
-if (sc2?.created !== false || sc2?.xpAwarded !== 0 || betoXp !== 100) { failed++; console.log("    ✗ reescanear no debería sumar XP; Beto debería tener 100"); }
+if (sc2?.created !== false || sc2?.xpAwarded !== 0 || sc2?.connection?.status !== "pending") { failed++; console.log("    ✗ reescanear no debería crear otra solicitud ni sumar XP"); }
 userId = caro;
 let scanLimited = false;
 for (let i = 0; i < 40 && !scanLimited; i++) scanLimited = (await call("POST", "/api/me/connections/scan", { token: "knet1.x.y" })).status === 429;
 console.log(`${scanLimited ? "✓" : "✗"} 429 POST   /api/me/connections/scan  rate limit por usuario`);
 if (!scanLimited) failed++;
+// Beto ve la solicitud entrante; solo él puede aceptarla (+100 XP a cada uno, una sola vez)
+userId = beto;
+const betoReq = (await check("solicitudes de Beto", "GET", "/api/me/connections?status=pending")).connections.find((c) => c.contact.userId === ana);
+if (betoReq?.direction !== "incoming" || betoReq?.source !== "qr") { failed++; console.log("    ✗ Beto debería ver la solicitud de Ana como entrante (qr)"); }
+userId = ana;
+const anaReq = (await check("solicitudes de Ana", "GET", "/api/me/connections?status=pending")).connections.find((c) => c.contact.userId === beto);
+const selfAcc = await check("Ana no acepta su propia solicitud", "PATCH", `/api/me/connections/${anaReq?.id}`, { status: "accepted" }, [403]);
+if (selfAcc?.error !== "not_recipient") { failed++; console.log("    ✗ debería ser not_recipient"); }
+userId = beto;
+const qrAcc1 = await check("Beto acepta la solicitud de Ana", "PATCH", `/api/me/connections/${betoReq?.id}`, { status: "accepted" });
+const qrAcc2 = await check("Beto acepta otra vez", "PATCH", `/api/me/connections/${betoReq?.id}`, { status: "accepted" });
+const { rows: xpAB } = await sql("SELECT id, xp FROM users WHERE id = ANY($1)", [[ana, beto]]);
+if (qrAcc1?.xpAwarded !== 100 || qrAcc1?.connection?.status !== "accepted" || qrAcc2?.xpAwarded !== 0 || !xpAB.every((u) => u.xp === 100)) {
+  failed++; console.log(`    ✗ aceptar debería dar +100 XP a Ana y a Beto una sola vez: ${JSON.stringify(xpAB)}`);
+}
+
+// Directorio del evento y solicitudes por peerUserId (knet-backend#24)
+const dani = await realUser("Dani");
+await sql("INSERT INTO registrations (user_id, event_id) SELECT unnest($1::uuid[]), 'and' ON CONFLICT DO NOTHING", [[ana, beto, caro, dani]]);
+userId = caro;
+const dir = await check("directorio de and (Caro)", "GET", "/api/me/attendees?eventId=and&limit=100");
+const dirIds = (dir?.attendees ?? []).map((a) => a.userId), anaCard = dir?.attendees?.find((a) => a.userId === ana);
+if (dir?.eventId !== "and" || typeof dir?.total !== "number" || !dirIds.includes(ana) || !dirIds.includes(dani) || dirIds.includes(caro)
+    || anaCard?.headline !== "CTO · Acme" || anaCard?.connection !== null || dir.attendees.some((a) => "email" in a)) {
+  failed++; console.log("    ✗ el directorio debería listar a los demás inscritos (sin Caro ni correos) con su conexión");
+}
+await sql(`INSERT INTO user_scopes (user_id, scope, granted) VALUES ($1, 'network', false)
+           ON CONFLICT (user_id, scope) DO UPDATE SET granted = false`, [dani]);
+const dirOff = await check("directorio sin quien oculta su red", "GET", "/api/me/attendees?eventId=and&limit=100");
+if (dirOff?.attendees?.some((a) => a.userId === dani)) { failed++; console.log("    ✗ Dani ocultó su red: no debería aparecer"); }
+const offReq = await check("pedir a quien oculta su red", "POST", "/api/me/connections", { peerUserId: dani }, [403]);
+if (offReq?.error !== "peer_network_off") { failed++; console.log("    ✗ debería ser peer_network_off"); }
+await sql("UPDATE user_scopes SET granted = true WHERE user_id = $1 AND scope = 'network'", [dani]);
+const notReg = await check("directorio de un evento sin inscripción", "GET", "/api/me/attendees?eventId=adc", undefined, [403]);
+if (notReg?.error !== "not_registered") { failed++; console.log("    ✗ debería ser not_registered"); }
+const own = await check("solicitud a uno mismo", "POST", "/api/me/connections", { peerUserId: caro }, [400]);
+const noShared = await check("solicitud fuera de un evento común", "POST", "/api/me/connections", { peerUserId: dani, eventId: "adc" }, [403]);
+if (own?.error !== "own_request" || noShared?.error !== "no_shared_event") { failed++; console.log("    ✗ errores esperados: own_request, no_shared_event"); }
+const rq1 = await check("Caro pide conectar con Dani", "POST", "/api/me/connections", { peerUserId: dani, eventId: "and" }, [201]);
+if (rq1?.connection?.status !== "pending" || rq1?.connection?.direction !== "outgoing" || rq1?.xpAwarded !== 0) { failed++; console.log("    ✗ la solicitud debería quedar pendiente y sin XP"); }
+const dup = await check("Caro repite la solicitud", "POST", "/api/me/connections", { peerUserId: dani }, [409]);
+if (dup?.error !== "request_pending") { failed++; console.log("    ✗ debería ser request_pending"); }
+const pairCount = async () => (await sql("SELECT count(*)::int AS n FROM connections WHERE (user_id = $1 AND peer_user_id = $2) OR (user_id = $2 AND peer_user_id = $1)", [caro, dani])).rows[0].n;
+userId = dani;
+const daniReq = (await check("solicitudes de Dani", "GET", "/api/me/connections?status=pending")).connections.find((c) => c.contact.userId === caro);
+if (daniReq?.direction !== "incoming") { failed++; console.log("    ✗ Dani debería ver la solicitud de Caro como entrante"); }
+await check("Dani rechaza", "DELETE", `/api/me/connections/${daniReq?.id}`, undefined, [204]);
+if (await pairCount() !== 0) { failed++; console.log("    ✗ rechazar debería borrar las dos filas"); }
+userId = caro;
+const rq2 = await check("Caro vuelve a pedir", "POST", "/api/me/connections", { peerUserId: dani }, [201]);
+await check("Caro cancela", "DELETE", `/api/me/connections/${rq2?.connection?.id}`, undefined, [204]);
+if (await pairCount() !== 0) { failed++; console.log("    ✗ cancelar debería borrar las dos filas"); }
+await check("Caro pide otra vez", "POST", "/api/me/connections", { peerUserId: dani }, [201]);
+userId = dani;
+const mutual = await check("Dani también pide: quedan conectados", "POST", "/api/me/connections", { peerUserId: caro }, [200]);
+const { rows: xpCD } = await sql("SELECT xp FROM users WHERE id = ANY($1)", [[caro, dani]]);
+if (mutual?.connection?.status !== "accepted" || mutual?.xpAwarded !== 100 || !xpCD.every((u) => u.xp === 100)) {
+  failed++; console.log(`    ✗ la solicitud mutua debería conectar con +100 XP a cada uno: ${JSON.stringify(xpCD)}`);
+}
+const again = await check("pedir a quien ya es conexión", "POST", "/api/me/connections", { peerUserId: caro }, [409]);
+if (again?.error !== "already_connected") { failed++; console.log("    ✗ debería ser already_connected"); }
+userId = caro;
+const dirAfter = await check("directorio con la conexión", "GET", "/api/me/attendees?eventId=and&limit=100");
+if (dirAfter?.attendees?.find((a) => a.userId === dani)?.connection?.status !== "accepted") { failed++; console.log("    ✗ el directorio debería mostrar la conexión con Dani"); }
 userId = ana;
 const anaConn = (await check("conexiones de Ana", "GET", "/api/me/connections")).connections.find((c) => c.contact.userId === beto);
 userId = beto;
@@ -280,7 +345,7 @@ const { rows: [left] } = await sql(
 if (delAna?.deleted?.coffees !== 1 || delAna?.deleted?.messages !== 4 || left.coffees + left.messages + left.connections !== 0) {
   failed++; console.log(`    ✗ borrar la cuenta debería eliminar sus cafés, mensajes y conexiones: ${JSON.stringify(left)}`);
 }
-for (const id of [beto, caro]) { userId = id; await check("limpiar usuario de prueba", "DELETE", "/api/me"); }
+for (const id of [beto, caro, dani]) { userId = id; await check("limpiar usuario de prueba", "DELETE", "/api/me"); }
 userId = energiaId;
 
 await check("generar dossier", "POST", "/api/me/dossiers/and", { ideas: ["Los gemelos digitales rinden más en activos críticos."], plan: ["Priorizar 2 activos críticos"] }, [200, 201]);

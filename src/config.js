@@ -60,6 +60,11 @@ export const config = {
     totemSecret: process.env.TOTEM_SECRET || (nodeEnv === "development" ? "knet-dev-totem" : ""),
   },
 
+  // Solicitudes de conexión a otros usuarios reales (POST /api/me/connections con peerUserId)
+  connections: {
+    requestRateLimit: Number(process.env.CONN_REQUEST_RATE_LIMIT || 20), // solicitudes por usuario y minuto
+  },
+
   // LinkedIn (OpenID Connect). Sin client id/secret, /api/auth/linkedin responde 503.
   linkedin: {
     clientId: process.env.LINKEDIN_CLIENT_ID || "",

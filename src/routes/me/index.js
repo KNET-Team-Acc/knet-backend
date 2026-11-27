@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireLegal } from "../../middleware/legal.js";
+import attendees from "./attendees.js";
 import checkins from "./checkins.js";
 import coffees from "./coffees.js";
 import connections from "./connections.js";
@@ -23,6 +24,7 @@ router.use("/registrations", registrations);
 router.use("/checkins", checkins);
 router.use("/missions", missions);
 router.use("/connections", connections);
+router.use("/attendees", attendees);       // directorio de asistentes del evento
 router.use("/qr-token", qr);
 router.use("/coffees", coffees);
 router.use("/messages", messages);

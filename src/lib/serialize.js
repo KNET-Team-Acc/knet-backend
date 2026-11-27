@@ -127,6 +127,9 @@ export const toContact = (c) => ({
   goal: c.goal,
 });
 
+/** Sentido de una solicitud entre usuarios reales desde el punto de vista de `viewerId`; null en el catálogo */
+export const directionOf = (requestedBy, viewerId) => (requestedBy ? (requestedBy === viewerId ? "outgoing" : "incoming") : null);
+
 export const toConnection = (r) => ({
   id: r.id,
   status: r.status,
@@ -135,8 +138,21 @@ export const toConnection = (r) => ({
   eventId: r.event_id,
   createdAt: r.created_at,
   acceptedAt: r.accepted_at,
+  // outgoing = la pidió el dueño de la fila; incoming = la otra persona. null: catálogo y conexiones anteriores
+  direction: directionOf(r.requested_by, r.user_id),
   // Contacto del catálogo o, en conexiones entre usuarios reales, la tarjeta pública del otro usuario
   contact: r.contact ? toContact(r.contact) : toPeer(r.peer),
+});
+
+/** Asistente del directorio de un evento (GET /api/me/attendees): tarjeta pública + estado de la conexión con quien consulta */
+export const toAttendee = (r, viewerId) => ({
+  userId: r.id,
+  name: r.name,
+  initials: initialsOf(r.name),
+  headline: [r.role, r.company].filter(Boolean).join(" · "),
+  industry: r.industry,
+  interests: r.interests ?? [],
+  connection: r.conn_id ? { id: r.conn_id, status: r.conn_status, direction: directionOf(r.requested_by, viewerId) } : null,
 });
 
 /** Tarjeta pública de otro usuario: sin correo ni datos sensibles */
