@@ -45,7 +45,7 @@ router.get("/", denyAdmin(), async (req, res) => {
     pool.query(`SELECT count(*)::int AS total ${FROM}`, [q.eventId, me]),
     pool.query(
       `SELECT t.*, cn.id AS conn_id, cn.status AS conn_status, cn.requested_by
-         FROM (SELECT u.id, u.name, u.role, u.company, u.industry,
+         FROM (SELECT u.id, u.name, u.role, u.company, u.industry, u.graph_role,
                       CASE WHEN COALESCE(si.granted, true) THEN u.interests ELSE '{}'::text[] END AS interests
                  ${FROM}) t
          LEFT JOIN connections cn ON cn.user_id = $2 AND cn.peer_user_id = t.id

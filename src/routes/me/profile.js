@@ -4,7 +4,7 @@ import { pool, query, tx } from "../../db.js";
 import { appendConsent, clientInfo } from "../../lib/consents.js";
 import { HttpError } from "../../lib/http.js";
 import { getScopes } from "../../lib/queries.js";
-import { toUser } from "../../lib/serialize.js";
+import { GRAPH_ROLES, toUser } from "../../lib/serialize.js";
 
 const router = Router();
 
@@ -21,6 +21,7 @@ const FIELDS = {
   location: ["location", "location"],
   interests: ["interests", "interests"],
   avatar: ["avatar", null],
+  graphRole: ["graph_role", null], // rol «Soy» del grafo de red (knet-backend#30)
 };
 const SOURCE_FIELDS = Object.values(FIELDS).map(([, src]) => src).filter(Boolean);
 
@@ -33,6 +34,7 @@ const patchSchema = z.object({
   location: z.string().trim().max(120).optional(),
   interests: z.array(z.string().trim().min(1).max(60)).max(12).optional(),
   avatar: z.record(z.string(), z.unknown()).nullable().optional(),
+  graphRole: z.enum(GRAPH_ROLES).nullable().optional(),
   // Origen explícito de los campos (p. ej. "mcp" al importar desde LinkedIn). Si se envía,
   // reemplaza el marcado automático como "edited" para esos campos.
   fieldSources: z.partialRecord(z.enum(SOURCE_FIELDS), z.enum(["mcp", "manual", "edited"])).optional(),
