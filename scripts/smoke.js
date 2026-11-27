@@ -268,6 +268,41 @@ if (again?.error !== "already_connected") { failed++; console.log("    ✗ deber
 userId = caro;
 const dirAfter = await check("directorio con la conexión", "GET", "/api/me/attendees?eventId=and&limit=100");
 if (dirAfter?.attendees?.find((a) => a.userId === dani)?.connection?.status !== "accepted") { failed++; console.log("    ✗ el directorio debería mostrar la conexión con Dani"); }
+
+// Ranking del evento (Misiones): XP global, mismas reglas de privacidad que el directorio
+{
+  const { tx } = await import("../src/db.js");
+  const { awardXp } = await import("../src/lib/xp.js");
+  await tx((c) => awardXp(c, dani, 50, "manual", "smoke:leaderboard")); // Dani 150, Ana/Beto/Caro 100
+  const lb = await check("ranking de and (Caro)", "GET", "/api/me/leaderboard?eventId=and");
+  const ids = (lb?.entries ?? []).map((e) => e.userId), at = (id) => lb?.entries?.find((e) => e.userId === id);
+  const sorted = (lb?.entries ?? []).every((e, i, a) => i === 0 || a[i - 1].xp >= e.xp);
+  if (lb?.eventId !== "and" || lb?.scope !== "event" || ![ana, beto, caro, dani].every((id) => ids.includes(id)) || !sorted
+      || !at(caro)?.me || at(ana)?.me || at(dani)?.xp !== 150 || at(dani)?.level !== 1 || at(ana)?.pos !== at(caro)?.pos
+      || at(dani)?.pos >= at(caro)?.pos || lb?.me?.pos !== at(caro)?.pos || lb?.me?.xp !== 100 || typeof lb?.total !== "number"
+      || lb.entries.some((e) => "email" in e)) {
+    failed++; console.log(`    ✗ el ranking debería listar a los inscritos por XP (empates en la misma posición), sin correos: ${JSON.stringify(lb?.entries)}`);
+  }
+  const lbTop = await check("ranking con limit=1", "GET", "/api/me/leaderboard?eventId=and&limit=1");
+  if (!lbTop?.entries?.some((e) => e.me) || lbTop.total !== lb?.total) { failed++; console.log("    ✗ quien consulta debería aparecer aunque quede fuera del top"); }
+  const lbConn = await check("ranking de mis conexiones (Caro)", "GET", "/api/me/leaderboard?eventId=and&scope=connections");
+  if (lbConn?.scope !== "connections" || lbConn?.total !== 2 || JSON.stringify(lbConn?.entries?.map((e) => e.userId)) !== JSON.stringify([dani, caro])
+      || lbConn?.me?.pos !== 2) {
+    failed++; console.log(`    ✗ el ranking de conexiones debería ser Dani (#1) y Caro (#2): ${JSON.stringify(lbConn?.entries)}`);
+  }
+  await sql(`INSERT INTO user_scopes (user_id, scope, granted) VALUES ($1, 'network', false)
+             ON CONFLICT (user_id, scope) DO UPDATE SET granted = false`, [dani]);
+  const lbOff = await check("ranking sin quien oculta su red", "GET", "/api/me/leaderboard?eventId=and&scope=connections");
+  if (lbOff?.entries?.some((e) => e.userId === dani) || lbOff?.total !== 1) { failed++; console.log("    ✗ Dani ocultó su red: no debería aparecer en el ranking"); }
+  userId = dani;
+  const lbMineOff = await check("ranking con la red oculta", "GET", "/api/me/leaderboard?eventId=and", undefined, [403]);
+  if (lbMineOff?.error !== "network_off") { failed++; console.log("    ✗ debería ser network_off"); }
+  await sql("UPDATE user_scopes SET granted = true WHERE user_id = $1 AND scope = 'network'", [dani]);
+  userId = caro;
+  const lbNotReg = await check("ranking de un evento sin inscripción", "GET", "/api/me/leaderboard?eventId=adc", undefined, [403]);
+  const lbBad = await check("ranking con scope inválido", "GET", "/api/me/leaderboard?eventId=and&scope=amigos", undefined, [400]);
+  if (lbNotReg?.error !== "not_registered" || !lbBad) { failed++; console.log("    ✗ errores esperados: not_registered y 400 por scope"); }
+}
 userId = ana;
 const anaConn = (await check("conexiones de Ana", "GET", "/api/me/connections")).connections.find((c) => c.contact.userId === beto);
 userId = beto;

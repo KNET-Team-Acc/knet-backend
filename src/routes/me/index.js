@@ -6,6 +6,7 @@ import coffees from "./coffees.js";
 import connections from "./connections.js";
 import consents from "./consents.js";
 import dossiers from "./dossiers.js";
+import leaderboard from "./leaderboard.js";
 import messages from "./messages.js";
 import missions from "./missions.js";
 import profile from "./profile.js";
@@ -25,6 +26,7 @@ router.use("/checkins", checkins);
 router.use("/missions", missions);
 router.use("/connections", connections);
 router.use("/attendees", attendees);       // directorio de asistentes del evento
+router.use("/leaderboard", leaderboard);   // ranking de asistentes del evento (Misiones)
 router.use("/qr-token", qr);
 router.use("/coffees", coffees);
 router.use("/messages", messages);
