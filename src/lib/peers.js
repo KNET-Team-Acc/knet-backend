@@ -20,10 +20,13 @@ export const CONN_SELECT = `
   SELECT cn.id, cn.user_id, cn.status, cn.source, cn.context, cn.event_id, cn.created_at, cn.accepted_at, cn.requested_by,
          to_jsonb(ct) AS contact,
          CASE WHEN pu.id IS NOT NULL THEN jsonb_build_object(
-           'id', pu.id, 'name', pu.name, 'role', pu.role, 'company', pu.company, 'industry', pu.industry) END AS peer
+           'id', pu.id, 'name', pu.name, 'role', pu.role, 'company', pu.company, 'industry', pu.industry,
+           -- intereses solo si concedió «interests» (misma regla que el directorio de asistentes)
+           'interests', CASE WHEN COALESCE(psi.granted, true) THEN pu.interests ELSE '{}'::text[] END) END AS peer
     FROM connections cn
     LEFT JOIN contacts ct ON ct.id = cn.contact_id
-    LEFT JOIN users pu ON pu.id = cn.peer_user_id`;
+    LEFT JOIN users pu ON pu.id = cn.peer_user_id
+    LEFT JOIN user_scopes psi ON psi.user_id = pu.id AND psi.scope = 'interests'`;
 
 const lockPair = (c, a, b) => c.query("SELECT pg_advisory_xact_lock(hashtext($1))", [[a, b].sort().join(":")]);
 

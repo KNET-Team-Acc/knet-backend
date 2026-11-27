@@ -343,7 +343,7 @@ La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/me/connections` | Mis conexiones (`?status=pending\|accepted`). Cada una trae `direction`: `outgoing` (la pedí yo), `incoming` (me la pidieron) o `null` (catálogo y anteriores) |
+| GET | `/api/me/connections` | Mis conexiones (`?status=pending\|accepted`). Cada una trae `direction`: `outgoing` (la pedí yo), `incoming` (me la pidieron) o `null` (catálogo y anteriores). Con otro usuario real, `contact` es su tarjeta pública (`userId`, `name`, `headline`, `industry` y `interests`, estos solo con su permiso `interests`; lo mismo en `/scan` y en los eventos SSE) |
 | POST | `/api/me/connections` | Contacto del catálogo: `{ contactId \| name, source?: "request"\|"match"\|"qr", context?, eventId? }`; por QR queda aceptada y suma +100 XP. Otro usuario real: `{ peerUserId, eventId?, context? }` → 201 solicitud pendiente, sin XP (la otra persona la recibe por SSE). 400 `own_request`, 403 `peer_network_off`/`no_shared_event` (deben compartir una inscripción; con `eventId`, esa), 409 `request_pending`/`already_connected`; si la otra persona ya te la había pedido, 200 y quedan conectados. `CONN_REQUEST_RATE_LIMIT` por minuto (429) |
 | PATCH | `/api/me/connections/:id` | `{ status: "accepted" }`: acepta una solicitud y suma +100 XP (una sola vez por contacto). Entre usuarios reales solo la acepta quien la recibió (403 `not_recipient`) y los dos suman +100 XP |
 | DELETE | `/api/me/connections/:id` | Quita la conexión (la XP ganada se conserva). Una solicitud pendiente entre usuarios reales se rechaza o cancela: se borran las dos filas y ambos reciben `connection.removed` |
