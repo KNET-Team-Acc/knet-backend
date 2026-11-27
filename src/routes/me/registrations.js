@@ -2,6 +2,7 @@ import { Router } from "express";
 import { query } from "../../db.js";
 import { HttpError } from "../../lib/http.js";
 import { levelInfo } from "../../lib/levels.js";
+import { denyAdmin } from "../../middleware/roles.js";
 
 const router = Router();
 
@@ -15,7 +16,7 @@ router.get("/", async (req, res) => {
 });
 
 // POST /api/me/registrations/:eventId → inscribirse (respeta los eventos exclusivos por nivel)
-router.post("/:eventId", async (req, res) => {
+router.post("/:eventId", denyAdmin(), async (req, res) => {
   // Los borradores del panel de creador no admiten inscripciones hasta publicarse
   const { rows: [ev] } = await query("SELECT id, name, min_level FROM events WHERE id = $1 AND status = 'published'", [req.params.eventId]);
   if (!ev) throw new HttpError(404, `No existe el evento ${req.params.eventId}`);

@@ -444,6 +444,11 @@ userId = demoId;
   await check("admin lee un evento del catálogo", "GET", "/api/admin/events/and");
   const catEdit = await check("admin no edita el catálogo sembrado", "PATCH", "/api/admin/events/and", { name: "Cambiado" }, [409]);
   if (catEdit?.error !== "catalog_event") { failed++; console.log("    ✗ debería ser catalog_event"); }
+  // La cuenta admin es de gestión: no se inscribe, no comparte QR ni escanea credenciales
+  const admReg = await check("admin no se inscribe a eventos", "POST", "/api/me/registrations/and", undefined, [403]);
+  const admQr = await check("admin no tiene QR de asistente", "GET", "/api/me/qr-token", undefined, [403]);
+  const admScan = await check("admin no escanea credenciales", "POST", "/api/me/connections/scan", { token: "x" }, [403]);
+  if ([admReg, admQr, admScan].some((r) => r?.error !== "admin_account")) { failed++; console.log("    ✗ debería ser admin_account"); }
 
   userId = orgA;
   await check("despublicar", "POST", `/api/admin/events/${evId}/unpublish`);

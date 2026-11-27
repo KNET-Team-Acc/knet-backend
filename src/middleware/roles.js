@@ -17,3 +17,14 @@ export function requireRole(...roles) {
     next();
   };
 }
+
+// Las cuentas admin son de gestión: no se inscriben, no comparten QR ni escanean credenciales,
+// así no cuentan como asistentes ni aparecen en la red de nadie.
+export function denyAdmin() {
+  return (req, _res, next) => {
+    if (accountRoleOf(req.user) === "admin") {
+      throw new HttpError(403, "Las cuentas admin no participan como asistentes", "admin_account");
+    }
+    next();
+  };
+}

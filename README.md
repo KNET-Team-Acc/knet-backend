@@ -287,6 +287,8 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 
 Solo cuentas con `accountRole` `organizer` o `admin` (`npm run user:role`). Sin rol: 403 `forbidden_role`; sin sesión: 401. Un organizador solo ve y edita sus eventos (403 `not_owner`); un admin ve y edita los de todos los organizadores. Los del catálogo sembrado son de solo lectura (409 `catalog_event`), porque `db:seed` los reescribe en cada despliegue. Los errores de validación son 400 `validation_error` con `issues[]` en español.
 
+La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id`, `GET /api/me/qr-token` y `POST /api/me/connections/scan` le responden 403 `admin_account` (no cuenta como inscrita ni aparece en la red de nadie).
+
 | Método | Ruta | Descripción |
 |---|---|---|
 | GET | `/api/admin/events` | Mis eventos creados con `status` (`draft`\|`published`), `counts` y `owner` (admin: `?all=1` para ver los de todos los organizadores y, al final, los del catálogo con `catalog: true`) |
