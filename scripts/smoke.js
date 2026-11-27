@@ -450,7 +450,26 @@ userId = demoId;
   const admScan = await check("admin no escanea credenciales", "POST", "/api/me/connections/scan", { token: "x" }, [403]);
   if ([admReg, admQr, admScan].some((r) => r?.error !== "admin_account")) { failed++; console.log("    ✗ debería ser admin_account"); }
 
+  // El admin añade un evento real externo al catálogo (curated): sin charlas, con su web oficial
+  const cur = await check("admin añade un evento real al catálogo", "POST", "/api/admin/events",
+    { name: "Smoke Expo Real", city: "Bogotá", curated: true, tags: ["IA"], industries: ["tech"], description: "Evento real externo añadido por el admin en el smoke." }, [201]);
+  const curId = cur?.event?.id;
+  if (!cur?.event?.curated || cur?.event?.hosted) { failed++; console.log("    ✗ debería ser curated y no hosted"); }
+  await check("días del evento de catálogo", "PUT", `/api/admin/events/${curId}/days`, { days: ["2027-08-20"] });
+  await check("ficha del evento de catálogo", "PUT", `/api/admin/events/${curId}/info`, { info: {
+    tone: ["#1E1452", "#0E3A4A"], accent: "#BE82FF", lema: "Expo real", para: "Equipos de IA", formato: ["Presencial", "1 día"], agenda: [], llevas: [] } });
+  const curNoUrl = await check("catálogo sin web oficial → 400", "POST", `/api/admin/events/${curId}/publish`, undefined, [400]);
+  if (!curNoUrl?.missing?.some((m) => /web oficial/.test(m)) || curNoUrl?.missing?.some((m) => /charla/.test(m))) { failed++; console.log("    ✗ debería pedir la web oficial y no charlas"); }
+  await check("web oficial", "PATCH", `/api/admin/events/${curId}`, { sourceUrl: "https://example.com/expo" });
+  await check("publicar el evento de catálogo", "POST", `/api/admin/events/${curId}/publish`);
+  const curPub = await check("sale en el catálogo como evento real", "GET", `/api/events/${curId}`);
+  if (curPub?.event?.hosted !== false || curPub?.event?.sourceUrl !== "https://example.com/expo" || curPub?.event?.sessions) { failed++; console.log("    ✗ debería verse como un evento real del catálogo, sin agenda hosted"); }
+  const aiOff = await check("asistente de IA del panel sin key → 503", "POST", "/api/admin/ai/assist", { message: "Propón tres misiones", eventId: curId }, [503]);
+  if (aiOff?.error !== "ai_unavailable") { failed++; console.log("    ✗ debería ser ai_unavailable"); }
+  await check("borrar el evento de catálogo", "DELETE", `/api/admin/events/${curId}`, undefined, [204]);
+
   userId = orgA;
+  await check("un organizador no añade eventos al catálogo", "POST", "/api/admin/events", { name: "No permitido", city: "Cali", curated: true }, [403]);
   await check("despublicar", "POST", `/api/admin/events/${evId}/unpublish`);
   userId = att;
   await check("despublicado → 404 en el catálogo", "GET", `/api/events/${evId}`, undefined, [404]);

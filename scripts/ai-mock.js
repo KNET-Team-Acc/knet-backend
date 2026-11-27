@@ -11,6 +11,7 @@ process.env.AI_RATE_LIMIT = "12";
 process.env.AI_TIMEOUT_MS = "5000";
 
 const { createApp } = await import("../src/app.js");
+const { config } = await import("../src/config.js");
 const { pool } = await import("../src/db.js");
 
 const logs = [];
@@ -36,6 +37,20 @@ globalThis.fetch = async (url, init) => {
   lastHeaders = new Headers(init.headers);
   if (mode === "error") return new Response(JSON.stringify({ type: "error", error: { type: "api_error", message: "boom" } }), { status: 500, headers: { "content-type": "application/json", "x-should-retry": "false" } });
   if (mode === "refusal") return message([], "refusal");
+  if (lastBody.output_config?.format && /panel de eventos de KNET/.test(lastBody.system || "")) {
+    // Asistente del panel: propuestas con cosas que el servidor debe recortar
+    return message([{ type: "text", text: JSON.stringify({
+      reply: "Te propongo una agenda y misiones.",
+      details: { name: "Andina Link", city: "Cartagena", description: "Congreso de telecomunicaciones.", para: "Operadores", tags: ["Telco", ""] },
+      agenda: [{ when: "08:00", what: "Registro", detail: "" }, { when: "", what: "Sin hora", detail: "" }],
+      sessions: [{ day: 0, time: "09:00", kind: "Keynote", title: "Apertura", room: "Plenaria", speaker: "" },
+        { day: 99, time: "10:00", kind: "Panel", title: "Día que no existe", room: "", speaker: "" },
+        { day: 0, time: "25:00", kind: "Charla", title: "Hora inválida", room: "", speaker: "" }],
+      speakers: [],
+      missions: [{ type: "networking", title: "Conecta con 3 operadores", condition: "", xp: 999 }],
+      venue: { zones: Array.from({ length: 8 }, (_, i) => ({ type: "labs", name: `Sala ${i + 1}`, size: "m", description: "" })) },
+    }) }]);
+  }
   if (lastBody.output_config?.format) {
     return message([{ type: "text", text: JSON.stringify({
       resumen: "Cerraste el Summit con buena actividad.", ideas: ["Los datos guían la transición energética."],
@@ -51,8 +66,8 @@ const BASE = `http://127.0.0.1:${server.address().port}`;
 const { rows: [demo] } = await pool.query("SELECT id, email FROM users WHERE email = 'demo.energia@knet.local'");
 let failed = 0;
 const ok = (cond, label) => { console.log(`${cond ? "✓" : "✗"} ${label}`); if (!cond) failed++; };
-const post = async (path, body) => {
-  const r = await realFetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json", "X-User-Id": demo.id }, body: JSON.stringify(body) });
+const post = async (path, body, uid = demo.id) => {
+  const r = await realFetch(BASE + path, { method: "POST", headers: { "Content-Type": "application/json", "X-User-Id": uid }, body: JSON.stringify(body) });
   return { status: r.status, json: await r.json().catch(() => null) };
 };
 
@@ -74,6 +89,25 @@ try {
   ok(/sesionesConCheckIn/.test(lastBody.messages[0].content) && /porMotivo/.test(lastBody.messages[0].content), "el prompt del dossier usa check-ins y xp_ledger");
   await pool.query("DELETE FROM registrations WHERE user_id = $1 AND event_id = 'adc'", [demo.id]); // adc: sin inscripción
   ok((await post("/api/ai/dossier", { eventId: "adc" })).status === 403, "dossier de un evento sin inscripción → 403");
+
+  // Asistente del panel de eventos (/api/admin/ai/assist): solo organizer/admin; propone, recorta y no guarda
+  const { rows: [adm] } = await pool.query(
+    `INSERT INTO users (email, name, industry, role, company, legal_version, account_role)
+     VALUES ('aimock.admin.' || floor(random() * 1e9)::text || '@knet.local', 'AI Mock Admin', 'tech', 'Producer', 'KNET', $1, 'admin')
+     RETURNING id, email`, [config.legalVersion]);
+  try {
+    ok((await post("/api/admin/ai/assist", { message: "Ayúdame" })).status === 403, "asistente del panel: un asistente sin rol → 403");
+    const as = await post("/api/admin/ai/assist", { message: "Propón agenda, misiones y recinto", eventId: "and" }, adm.id);
+    const pr = as.json?.proposals;
+    ok(as.status === 200 && as.json.reply === "Te propongo una agenda y misiones.", "asistente del panel responde");
+    ok(/"nombre":"[^"]*Andina/.test(lastBody.system) && !lastBody.system.includes(adm.email), "el prompt lleva el evento abierto y no el correo de quien edita");
+    ok(pr?.sessions?.length === 1 && pr.sessions[0].title === "Apertura", "descarta charlas con un día inexistente o una hora inválida");
+    ok(pr?.missions?.[0]?.xp === 500 && pr?.agenda?.length === 1 && pr?.details?.tags?.length === 1, "recorta XP, agenda sin hora y etiquetas vacías");
+    ok(pr?.venue?.zones?.length === 6, "el recinto propuesto queda en 6 zonas como máximo");
+    ok((await post("/api/admin/ai/assist", { message: "x".repeat(1501) }, adm.id)).status === 400, "asistente del panel: mensaje demasiado largo → 400");
+  } finally {
+    await pool.query("DELETE FROM users WHERE id = $1", [adm.id]);
+  }
 
   mode = "refusal";
   const ref = await post("/api/ai/chat", { message: "hola" });

@@ -30,7 +30,8 @@ export const eventFields = {
   organizer: txt(120, 0, "El organizador"),
 };
 
-export const createEventSchema = z.object(eventFields).partial().required({ name: true, city: true }).strict();
+// curated: solo admin → evento real externo para el catálogo (exige sourceUrl para publicarse)
+export const createEventSchema = z.object({ ...eventFields, curated: z.boolean().optional() }).partial().required({ name: true, city: true }).strict();
 
 export const patchEventSchema = z.object(eventFields).partial().strict()
   .refine((o) => Object.keys(o).length > 0, "Envía al menos un campo");

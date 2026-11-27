@@ -100,16 +100,17 @@ router.get("/", async (req, res) => {
 // POST /api/admin/events → crea un borrador
 router.post("/", async (req, res) => {
   const body = createEventSchema.parse(req.body ?? {});
+  if (body.curated && !isAdmin(req.user)) throw new HttpError(403, "Solo un admin puede añadir eventos al catálogo", "forbidden_role");
   await checkIndustries({ query }, body.industries);
   const ev = await tx(async (c) => {
     const id = await newEventId(c);
     await c.query(
       `INSERT INTO events (id, name, kind, city, venue_name, date_label, lat, lon, tags, industries, organizer,
-                           source_url, description, owner_id, status, published_at)
-       VALUES ($1, $2, 'real', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', NULL)`,
+                           source_url, description, owner_id, status, published_at, curated)
+       VALUES ($1, $2, 'real', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'draft', NULL, $14)`,
       [id, body.name, body.city, body.venueName ?? "", body.dateLabel ?? "", body.lat ?? null, body.lon ?? null,
         body.tags ?? [], body.industries ?? [], body.organizer || req.user.company || req.user.name, body.sourceUrl ?? null,
-        body.description ?? "", req.user.id]);
+        body.description ?? "", req.user.id, !!body.curated]);
     return detail(c, id);
   });
   res.status(201).json({ event: ev });
@@ -194,7 +195,9 @@ router.post("/:id/publish", async (req, res) => {
     const d = await detail(c, req.params.id);
     const missing = [];
     if (!d.days.length) missing.push("al menos un día");
-    if (!d.sessions.length) missing.push("al menos una charla");
+    // Un evento del catálogo (curated) no necesita charlas (el frontend arma su agenda) pero sí su web oficial
+    if (d.curated) { if (!d.sourceUrl) missing.push("la web oficial del evento (fuente)"); }
+    else if (!d.sessions.length) missing.push("al menos una charla");
     if (!d.info) missing.push("la ficha del evento (colores y formato)");
     if (!d.description) missing.push("una descripción");
     if (missing.length) throw new HttpError(400, `Para publicar falta: ${missing.join(", ")}`, "incomplete_event", { missing });
@@ -381,4 +384,5 @@ router.delete("/:id/missions/:code", async (req, res) => {
   res.status(204).end();
 });
 
+export { detail, editable };
 export default router;
