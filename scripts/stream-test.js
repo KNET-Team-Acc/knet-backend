@@ -79,6 +79,33 @@ try {
   await fetch(BASE + "/api/me", { method: "DELETE", headers: { Authorization: `Bearer ${login.accessToken}` } });
 
   await api("DELETE", `/api/me/connections/${created.json.connection.id}`);
+
+  // Solicitud entre usuarios reales (knet-backend#24): le llega en vivo al destinatario y, si la rechaza, a quien la pidió
+  const legal = process.env.LEGAL_VERSION || "1.2";
+  const realUser = async (name) => (await pool.query(
+    `INSERT INTO users (email, name, industry, role, company, legal_version) VALUES ($1, $2, 'tech', 'CTO', 'Acme', $3) RETURNING id`,
+    [`stream.${name.toLowerCase()}.${Date.now()}@knet.local`, `Stream ${name}`, legal])).rows[0].id;
+  const ana = await realUser("Ana"), beto = await realUser("Beto");
+  try {
+    await pool.query("INSERT INTO registrations (user_id, event_id) VALUES ($1, 'and'), ($2, 'and') ON CONFLICT DO NOTHING", [ana, beto]);
+    const as = (id) => ({ "Content-Type": "application/json", "X-User-Id": id });
+    const call = (id, method, path, body) => fetch(BASE + path, { method, headers: as(id), body: body && JSON.stringify(body) }).then(async (r) => ({ status: r.status, json: r.status === 204 ? null : await r.json() }));
+    const sA = await openStream(`/api/me/stream?userId=${ana}`), sB = await openStream(`/api/me/stream?userId=${beto}`);
+    const req = await call(ana, "POST", "/api/me/connections", { peerUserId: beto, eventId: "and" });
+    await sleep(150);
+    const inB = sB.events.find((e) => e.type === "connection.request");
+    ok(req.status === 201 && inB?.data.connection.direction === "incoming" && inB.data.connection.contact.userId === ana && inB.data.connection.status === "pending",
+      "el destinatario recibe connection.request con direction incoming");
+    ok(sA.events.at(-1)?.type === "connection.request" && sA.events.at(-1).data.connection.direction === "outgoing", "quien la pide la ve como outgoing en sus otras sesiones");
+    const del = await call(beto, "DELETE", `/api/me/connections/${inB?.data.connection.id}`);
+    await sleep(150);
+    const rmA = sA.events.find((e) => e.type === "connection.removed");
+    ok(del.status === 204 && rmA?.data.connectionId === req.json.connection.id && rmA.data.reason === "declined" && rmA.data.peerUserId === beto,
+      "al rechazarla, quien la pidió recibe connection.removed (declined) con el id de su fila");
+    sA.close(); sB.close();
+  } finally {
+    await pool.query("DELETE FROM users WHERE id = ANY($1)", [[ana, beto]]);
+  }
 } finally {
   await stopEventsBus();
   server.closeAllConnections?.();

@@ -9,13 +9,14 @@
  *   las instancias lo reciben con LISTEN (también la que lo emitió), así el cliente puede estar
  *   conectado a cualquiera. Sin esa opción el bus es local al proceso (suficiente con una instancia).
  *
- * Tipos: connection.request, connection.accepted, message.new, coffee.updated.
+ * Tipos: connection.request, connection.accepted, connection.removed (solicitud entre usuarios reales rechazada o
+ * cancelada: { connectionId, peerUserId, reason }), message.new, coffee.updated.
  */
 import { EventEmitter } from "node:events";
 import pg from "pg";
 import { config } from "../config.js";
 
-export const EVENT_TYPES = ["connection.request", "connection.accepted", "message.new", "coffee.updated"];
+export const EVENT_TYPES = ["connection.request", "connection.accepted", "connection.removed", "message.new", "coffee.updated"];
 const CHANNEL = "knet_events";
 const REPLAY_MAX = 100;
 const REPLAY_TTL_MS = 5 * 60_000;

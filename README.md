@@ -154,6 +154,7 @@ Todas están en [`.env.example`](.env.example) (desarrollo) y [`.env.production.
 | `AI_API_KEY` · `AI_MODEL` | Key de Claude y modelo. Sin key, `/api/ai/*` responde `503` y el frontend usa su contenido local | — · `claude-opus-5-5` |
 | `AI_TIMEOUT_MS` · `AI_RATE_LIMIT` | Tiempo por intento y peticiones por usuario y minuto | `20000` · `10` |
 | `QR_SECRET` · `QR_TTL_S` · `QR_SCAN_RATE_LIMIT` | Firma y vida de los QR dinámicos, escaneos por minuto | derivado de `JWT_SECRET` · `45` · `30` |
+| `CONN_REQUEST_RATE_LIMIT` | Solicitudes de conexión a otros usuarios reales por usuario y minuto | `20` |
 | `TOTEM_SECRET` | Clave de los tótems NFC. Vacía fuera de desarrollo = check-in NFC desactivado (`503`) | `knet-dev-totem` solo en desarrollo |
 | `EVENTS_PG_NOTIFY` · `SSE_HEARTBEAT_MS` | Tiempo real con varias instancias y heartbeat del SSE | `false` · `25000` |
 
@@ -287,7 +288,7 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 
 Solo cuentas con `accountRole` `organizer` o `admin` (`npm run user:role`). Sin rol: 403 `forbidden_role`; sin sesión: 401. Un organizador solo ve y edita sus eventos (403 `not_owner`); un admin ve y edita los de todos los organizadores. Los del catálogo sembrado son de solo lectura (409 `catalog_event`), porque `db:seed` los reescribe en cada despliegue. Los errores de validación son 400 `validation_error` con `issues[]` en español.
 
-La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id`, `GET /api/me/qr-token` y `POST /api/me/connections/scan` le responden 403 `admin_account` (no cuenta como inscrita ni aparece en la red de nadie).
+La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id`, `GET /api/me/qr-token`, `POST /api/me/connections/scan`, `GET /api/me/attendees` y las solicitudes con `peerUserId` le responden 403 `admin_account` (no cuenta como inscrita ni aparece en la red ni en el directorio de nadie).
 
 | Método | Ruta | Descripción |
 |---|---|---|
@@ -342,12 +343,13 @@ La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/me/connections` | Mis conexiones (`?status=pending\|accepted`) |
-| POST | `/api/me/connections` | `{ contactId \| name, source?: "request"\|"match"\|"qr", context?, eventId? }`. Por QR queda aceptada y suma +100 XP |
-| PATCH | `/api/me/connections/:id` | `{ status: "accepted" }`: acepta una solicitud y suma +100 XP (una sola vez por contacto) |
-| DELETE | `/api/me/connections/:id` | Quita la conexión. La XP ganada se conserva |
+| GET | `/api/me/connections` | Mis conexiones (`?status=pending\|accepted`). Cada una trae `direction`: `outgoing` (la pedí yo), `incoming` (me la pidieron) o `null` (catálogo y anteriores) |
+| POST | `/api/me/connections` | Contacto del catálogo: `{ contactId \| name, source?: "request"\|"match"\|"qr", context?, eventId? }`; por QR queda aceptada y suma +100 XP. Otro usuario real: `{ peerUserId, eventId?, context? }` → 201 solicitud pendiente, sin XP (la otra persona la recibe por SSE). 400 `own_request`, 403 `peer_network_off`/`no_shared_event` (deben compartir una inscripción; con `eventId`, esa), 409 `request_pending`/`already_connected`; si la otra persona ya te la había pedido, 200 y quedan conectados. `CONN_REQUEST_RATE_LIMIT` por minuto (429) |
+| PATCH | `/api/me/connections/:id` | `{ status: "accepted" }`: acepta una solicitud y suma +100 XP (una sola vez por contacto). Entre usuarios reales solo la acepta quien la recibió (403 `not_recipient`) y los dos suman +100 XP |
+| DELETE | `/api/me/connections/:id` | Quita la conexión (la XP ganada se conserva). Una solicitud pendiente entre usuarios reales se rechaza o cancela: se borran las dos filas y ambos reciben `connection.removed` |
+| GET | `/api/me/attendees` | `?eventId=&limit=50&offset=0` → `{ eventId, attendees: [{ userId, name, initials, headline, industry, interests, connection: { id, status, direction } \| null }], total }`: inscritos al evento que comparten su red, sin uno mismo ni admins; intereses solo con el permiso `interests`; ordenados por intereses en común. 403 `not_registered`, `network_off` o `admin_account` |
 | GET | `/api/me/qr-token` | `?eventId=` → `{ token, expiresAt, ttl, refreshIn }`: token HMAC (`QR_SECRET`) de un solo uso que caduca en `QR_TTL_S` s. 403 sin el permiso `network` |
-| POST | `/api/me/connections/scan` | `{ token, context? }`: conexión aceptada en ambos sentidos y +100 XP a cada uno una vez. 201 nueva, 200 ya existía. 400 `invalid_qr`/`qr_expired`/`own_qr`, 409 `qr_used`, 429 |
+| POST | `/api/me/connections/scan` | `{ token, context? }`: envía una solicitud pendiente al dueño del QR (sin XP hasta que la acepte). 201 nueva; 200 si ya existía la solicitud o la conexión, o si la otra persona ya te la había pedido (quedan conectados, +100 XP a cada uno). 400 `invalid_qr`/`qr_expired`/`own_qr`, 409 `qr_used`, 429 |
 | GET | `/api/me/coffees` | Cafés 1:1 donde participo (`?status=proposed\|accepted\|declined\|done\|cancelled`), con `role`, `connectionId` y `with` |
 | POST | `/api/me/coffees` | `{ connectionId, slot (ISO, futuro), place?, eventId? }`. 403 `not_connected`, 409 `coffee_active` |
 | PATCH | `/api/me/coffees/:id` | `{ status: "accepted"\|"declined"\|"done"\|"cancelled" }`. Aceptar suma +50 XP a cada participante con cuenta, una vez. 409 `invalid_transition` |
@@ -364,7 +366,7 @@ La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id
 | POST | `/api/ai/chat` | AI Concierge. `{ message, history?, eventId?, day?, lang? }` → `{ reply, sources }`. La agenda del día (variante de la industria) y los speakers van en el prompt; `sources` lista las sesiones citadas |
 | POST | `/api/ai/simulate` | Simulador de networking. `{ contactId \| contactName, message, history?, lang? }` → `{ reply }` en la voz del contacto |
 | POST | `/api/ai/dossier` | `{ eventId, lang? }` → `{ dossier }` con `content.generatedBy: "ai"` y `content.paraTi`, a partir de check-ins, conexiones y XP reales |
-| GET | `/api/me/stream` | Server-Sent Events del usuario (`connection.request`, `connection.accepted`, `message.new`, `coffee.updated`) |
+| GET | `/api/me/stream` | Server-Sent Events del usuario (`connection.request`, `connection.accepted`, `connection.removed`, `message.new`, `coffee.updated`) |
 
 </details>
 
@@ -391,7 +393,7 @@ es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)
 
 | Tema | Comportamiento |
 |---|---|
-| Eventos | `connection.request` y `connection.accepted`, `message.new` (`{ connectionId, message }`, con el `connectionId` de quien lo recibe) y `coffee.updated` (`{ coffeeId, status }`, a los dos participantes) |
+| Eventos | `connection.request` y `connection.accepted` (`{ connection }`, con `direction`; entre usuarios reales a las dos partes, cada una con su fila), `connection.removed` (`{ connectionId, peerUserId, reason: "declined"\|"cancelled" }`, a las dos partes), `message.new` (`{ connectionId, message }`, con el `connectionId` de quien lo recibe) y `coffee.updated` (`{ coffeeId, status }`, a los dos participantes) |
 | Heartbeat | Un comentario `: ping` cada `SSE_HEARTBEAT_MS` para que proxies y balanceadores no corten la conexión |
 | Reanudación | `EventSource` reconecta solo (`retry: 5000`) con `Last-Event-ID`; la API reenvía lo que siga en el buffer (100 eventos por usuario, 5 min). También acepta `?lastEventId=` |
 | Token | Se valida al conectar. Al reconectar con uno vencido responde 401 y el cliente abre el stream con uno nuevo. En desarrollo también sirve `?userId=<uuid>` |
