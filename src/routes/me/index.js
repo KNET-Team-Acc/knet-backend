@@ -9,6 +9,7 @@ import dossiers from "./dossiers.js";
 import leaderboard from "./leaderboard.js";
 import messages from "./messages.js";
 import missions from "./missions.js";
+import network from "./network.js";
 import profile from "./profile.js";
 import qr from "./qr.js";
 import registrations from "./registrations.js";
@@ -27,6 +28,7 @@ router.use("/missions", missions);
 router.use("/connections", connections);
 router.use("/attendees", attendees);       // directorio de asistentes del evento
 router.use("/leaderboard", leaderboard);   // ranking de asistentes del evento (Misiones)
+router.use("/network", network);           // grafo de la red con 1.º y 2.º grado
 router.use("/qr-token", qr);
 router.use("/coffees", coffees);
 router.use("/messages", messages);

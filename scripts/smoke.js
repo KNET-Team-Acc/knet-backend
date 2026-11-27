@@ -314,6 +314,79 @@ if (dirAfter?.attendees?.find((a) => a.userId === dani)?.connection?.status !== 
   const lbBad = await check("ranking con scope inválido", "GET", "/api/me/leaderboard?eventId=and&scope=amigos", undefined, [400]);
   if (lbNotReg?.error !== "not_registered" || !lbBad) { failed++; console.log("    ✗ errores esperados: not_registered y 400 por scope"); }
 }
+
+// Grafo de la red con 1.º y 2.º grado (GET /api/me/network, knet-backend#30). Usuarios propios del bloque:
+// Nora–Bruno–Celia, Bruno–Dario y Celia–Dario (desde Nora, arista 2.º–2.º), Nora–Eva y Bruno–Eva (arista 1.º–1.º),
+// Dario–Fede (3 saltos desde Nora: fuera) y un admin conectado con Bruno que nunca debe aparecer.
+{
+  const pair = (a, b) => sql(
+    `INSERT INTO connections (user_id, peer_user_id, status, source, accepted_at, requested_by)
+     VALUES ($1, $2, 'accepted', 'request', now(), $1), ($2, $1, 'accepted', 'request', now(), $1)`, [a, b]);
+  const nora = await realUser("Nora"), bruno = await realUser("Bruno"), celia = await realUser("Celia");
+  const dario = await realUser("Dario"), eva = await realUser("Eva"), fede = await realUser("Fede"), admX = await realUser("AdminX");
+  await sql("UPDATE users SET account_role = 'admin' WHERE id = $1", [admX]);
+  for (const [a, b] of [[nora, bruno], [bruno, celia], [bruno, dario], [celia, dario], [nora, eva], [bruno, eva], [dario, fede], [bruno, admX]]) await pair(a, b);
+
+  userId = celia;
+  const role = await check("Celia elige su rol «Soy» (graphRole)", "PATCH", "/api/me", { graphRole: "expert" });
+  const roleMe = await check("perfil con graphRole", "GET", "/api/me");
+  const badRole = await check("graphRole inválido → 400", "PATCH", "/api/me", { graphRole: "cliente" }, [400]);
+  if (role?.user?.graphRole !== "expert" || roleMe?.user?.graphRole !== "expert" || !badRole) {
+    failed++; console.log("    ✗ graphRole debería guardarse, devolverse en /api/me y rechazar valores fuera de client|expert|speaker|partner");
+  }
+
+  userId = nora;
+  const net = await check("red de Nora (depth=2)", "GET", "/api/me/network?depth=2");
+  const node = (id) => net?.nodes?.find((n) => n.id === id);
+  const hasEdge = (a, b) => net?.edges?.some((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a));
+  const ids = (net?.nodes ?? []).map((n) => n.id);
+  if (net?.me?.id !== nora || node(bruno)?.degree !== 1 || node(eva)?.degree !== 1 || node(bruno)?.kind !== "user"
+      || node(celia)?.degree !== 2 || JSON.stringify(node(celia)?.via) !== JSON.stringify([bruno]) || node(celia)?.graphRole !== "expert"
+      || node(celia)?.headline !== "CTO · Acme" || ids.includes(nora) || ids.includes(admX) || ids.includes(fede) || node(dario)?.degree !== 2
+      || new Set(ids).size !== ids.length || net.nodes.some((n) => "email" in n)) {
+    failed++; console.log(`    ✗ Nora–Bruno–Celia: Bruno y Eva en 1.er grado, Celia y Dario en 2.º con via [Bruno], sin admin, Fede ni correos: ${JSON.stringify(net)}`);
+  }
+  if (!hasEdge(nora, bruno) || !hasEdge(bruno, celia) || !hasEdge(bruno, eva) || !hasEdge(celia, dario) || hasEdge(bruno, admX)
+      || (net?.edges ?? []).some((e) => !(e.a === nora || ids.includes(e.a)) || !(e.b === nora || ids.includes(e.b)))) {
+    failed++; console.log(`    ✗ aristas esperadas Nora–Bruno, Bruno–Celia, Bruno–Eva (1.º–1.º) y Celia–Dario (2.º–2.º), solo entre nodos incluidos: ${JSON.stringify(net?.edges)}`);
+  }
+  const net1 = await check("red de Nora (depth=1)", "GET", "/api/me/network?depth=1");
+  if (net1?.nodes?.some((n) => n.degree === 2) || !net1?.nodes?.some((n) => n.id === bruno)) { failed++; console.log("    ✗ depth=1 no debería traer 2.º grado"); }
+  const netLim = await check("red de Nora con limit=1", "GET", "/api/me/network?limit=1");
+  if (netLim?.nodes?.length !== 1 || netLim.nodes[0].degree !== 1) { failed++; console.log("    ✗ limit debería acotar el total, primero el 1.er grado"); }
+  await check("limit > 150 → 400", "GET", "/api/me/network?limit=151", undefined, [400]);
+
+  // Desde Fede: Dario en 1.er grado; Bruno y Celia vía [Dario] (Nora queda a 3 saltos)
+  userId = fede;
+  const netF = await check("red de Fede", "GET", "/api/me/network");
+  const nf = (id) => netF?.nodes?.find((n) => n.id === id);
+  if (nf(dario)?.degree !== 1 || nf(celia)?.degree !== 2 || JSON.stringify(nf(bruno)?.via) !== JSON.stringify([dario]) || nf(nora)) {
+    failed++; console.log("    ✗ Fede debería ver a Dario en 1.er grado y a Bruno y Celia en 2.º vía Dario (Nora queda a 3 saltos)");
+  }
+  // Desde Celia: Bruno y Dario en 1.er grado; Nora y Eva vía Bruno y Fede vía Dario en 2.º
+  userId = celia;
+  const netC = await check("red de Celia", "GET", "/api/me/network");
+  const eC = netC?.nodes?.find((n) => n.id === eva), nC = netC?.nodes?.find((n) => n.id === nora);
+  if (JSON.stringify(eC?.via) !== JSON.stringify([bruno]) || nC?.degree !== 2 || netC?.nodes?.find((n) => n.id === fede)?.degree !== 2) {
+    failed++; console.log("    ✗ Celia debería ver a Eva y Nora vía Bruno y a Fede vía Dario en 2.º grado");
+  }
+
+  // Privacidad: Celia revoca «network» → desaparece del grafo de los demás y el suyo responde 403 network_off
+  userId = celia;
+  await check("Celia revoca «network»", "PATCH", "/api/me", { scopes: { network: false } });
+  const netOwnOff = await check("red con «network» revocado → 403", "GET", "/api/me/network", undefined, [403]);
+  if (netOwnOff?.error !== "network_off") { failed++; console.log("    ✗ debería ser network_off"); }
+  userId = nora;
+  const netOff = await check("red de Nora sin Celia", "GET", "/api/me/network");
+  if (netOff?.nodes?.some((n) => n.id === celia) || netOff?.edges?.some((e) => e.a === celia || e.b === celia)) {
+    failed++; console.log("    ✗ Celia ocultó su red: no debería aparecer ni en nodos ni en aristas");
+  }
+  userId = admX;
+  const netAdm = await check("red de una cuenta admin → 403", "GET", "/api/me/network", undefined, [403]);
+  if (netAdm?.error !== "admin_account") { failed++; console.log("    ✗ debería ser admin_account"); }
+  await sql("DELETE FROM users WHERE id = $1", [admX]);
+  for (const id of [nora, bruno, celia, dario, eva, fede]) { userId = id; await check("limpiar usuario del grafo", "DELETE", "/api/me"); }
+}
 userId = ana;
 const anaConn = (await check("conexiones de Ana", "GET", "/api/me/connections")).connections.find((c) => c.contact.userId === beto);
 userId = beto;

@@ -288,7 +288,7 @@ curl -X POST http://localhost:4000/api/me/checkins -H "Content-Type: application
 
 Solo cuentas con `accountRole` `organizer` o `admin` (`npm run user:role`). Sin rol: 403 `forbidden_role`; sin sesión: 401. Un organizador solo ve y edita sus eventos (403 `not_owner`); un admin ve y edita los de todos los organizadores. Los del catálogo sembrado son de solo lectura (409 `catalog_event`), porque `db:seed` los reescribe en cada despliegue. Los errores de validación son 400 `validation_error` con `issues[]` en español.
 
-La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id`, `GET /api/me/qr-token`, `POST /api/me/connections/scan`, `GET /api/me/attendees` y las solicitudes con `peerUserId` le responden 403 `admin_account` (no cuenta como inscrita ni aparece en la red ni en el directorio de nadie).
+La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id`, `GET /api/me/qr-token`, `POST /api/me/connections/scan`, `GET /api/me/attendees`, `GET /api/me/network` y las solicitudes con `peerUserId` le responden 403 `admin_account` (no cuenta como inscrita ni aparece en la red ni en el directorio de nadie).
 
 | Método | Ruta | Descripción |
 |---|---|---|
@@ -314,8 +314,8 @@ La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/api/me` | Perfil, XP, nivel, permisos, rol de la cuenta (`accountRole`), estadísticas e inscripciones |
-| PATCH | `/api/me` | Edita `name`, `role`, `company`, `industry`, `seniority`, `location`, `interests`, `avatar` y `scopes` |
+| GET | `/api/me` | Perfil, XP, nivel, permisos, rol de la cuenta (`accountRole`), rol «Soy» del grafo (`graphRole`), estadísticas e inscripciones |
+| PATCH | `/api/me` | Edita `name`, `role`, `company`, `industry`, `seniority`, `location`, `interests`, `avatar`, `graphRole` (`client`\|`expert`\|`speaker`\|`partner`\|`null`) y `scopes` |
 | DELETE | `/api/me` | Suprime el perfil, el progreso y las sesiones. Exige Bearer (o `X-User-Id` en desarrollo); las cuentas demo responden 403 `demo_account`. Los consentimientos se conservan desvinculados con un evento `supresion`. Devuelve `{ deleted: { profile, registrations, … }, consentsRetained }` |
 | GET | `/api/me/consents` | Registro de consentimientos, con la verificación de la cadena (`chain.valid`) |
 | POST | `/api/me/consents` | `{ type, documents?, details? }`: agrega un registro (`supresion` solo lo registra el servidor). Una `aceptacion` de `terminos` y `privacidad` actualiza `legalVersion` |
@@ -349,6 +349,7 @@ La cuenta admin es de gestión, no de asistente: `POST /api/me/registrations/:id
 | DELETE | `/api/me/connections/:id` | Quita la conexión (la XP ganada se conserva). Una solicitud pendiente entre usuarios reales se rechaza o cancela: se borran las dos filas y ambos reciben `connection.removed` |
 | GET | `/api/me/attendees` | `?eventId=&limit=50&offset=0` → `{ eventId, attendees: [{ userId, name, initials, headline, industry, interests, connection: { id, status, direction } \| null }], total }`: inscritos al evento que comparten su red, sin uno mismo ni admins; intereses solo con el permiso `interests`; ordenados por intereses en común. 403 `not_registered`, `network_off` o `admin_account` |
 | GET | `/api/me/leaderboard` | `?eventId=&scope=event\|connections&limit=50` → `{ eventId, scope, entries: [{ pos, userId, name, initials, xp, level, me }], me: { pos, xp, level }, total }`: ranking por XP global (`users.xp`, `pos` = RANK, empates comparten posición) de los inscritos al evento que comparten su red, sin admins; quien consulta siempre aparece. `scope=connections`: solo tú y tus conexiones aceptadas con usuarios reales inscritas al evento. 403 `not_registered`, `network_off` o `admin_account` |
+| GET | `/api/me/network` | `?depth=1\|2&eventId=&limit=60` (máx. 150) → `{ me: { id, graphRole }, nodes: [{ id, kind: "user"\|"contact", name, headline, industry, graphRole, degree: 1\|2, via: [ids] }], edges: [{ a, b }] }`: grafo de la red. 1.er grado = conexiones aceptadas (usuarios por uuid y contactos del catálogo como `c:<id>`); 2.º grado (`depth=2`, por defecto) = conexiones aceptadas de esos usuarios que no son tú ni ya de 1.er grado, con `via` = los de 1.er grado que te conectan. `edges` = todas las conexiones aceptadas entre los nodos incluidos y tú (también 1.º–1.º y 2.º–2.º), una por pareja; tus aristas usan `me.id`. Solo usuarios que comparten su red, sin admins, y cada nodo expone solo nombre, titular, industria y `graphRole` (nunca correo). `limit` acota el total: primero el 1.er grado. `eventId` filtra el primer salto. 403 `network_off` o `admin_account` |
 | GET | `/api/me/qr-token` | `?eventId=` → `{ token, expiresAt, ttl, refreshIn }`: token HMAC (`QR_SECRET`) de un solo uso que caduca en `QR_TTL_S` s. 403 sin el permiso `network` |
 | POST | `/api/me/connections/scan` | `{ token, context? }`: envía una solicitud pendiente al dueño del QR (sin XP hasta que la acepte). 201 nueva; 200 si ya existía la solicitud o la conexión, o si la otra persona ya te la había pedido (quedan conectados, +100 XP a cada uno). 400 `invalid_qr`/`qr_expired`/`own_qr`, 409 `qr_used`, 429 |
 | GET | `/api/me/coffees` | Cafés 1:1 donde participo (`?status=proposed\|accepted\|declined\|done\|cancelled`), con `role`, `connectionId` y `with` |
@@ -407,7 +408,7 @@ es.addEventListener("connection.accepted", (e) => console.log(JSON.parse(e.data)
 
 ## Modelo de datos
 
-Seis migraciones en `db/migrations/`: `001_init`, `002_user_erasure`, `003_auth`, `004_coffees_messages`, `005_qr_nfc` y `006_roles`.
+Ocho migraciones en `db/migrations/`: `001_init`, `002_user_erasure`, `003_auth`, `004_coffees_messages`, `005_qr_nfc`, `006_roles`, `007_connection_requests` y `008_graph_role`.
 
 ```mermaid
 erDiagram
@@ -430,7 +431,7 @@ erDiagram
 
 | Grupo | Tablas |
 |---|---|
-| **Perfil** | `users` (con `password_hash`, `linkedin_sub`, `legal_version`, `email_verified_at`, `photo_url` y `account_role`: `attendee`\|`organizer`\|`admin`; `role` es el cargo del perfil), `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción) |
+| **Perfil** | `users` (con `password_hash`, `linkedin_sub`, `legal_version`, `email_verified_at`, `photo_url`, `account_role`: `attendee`\|`organizer`\|`admin`, y `graph_role`: rol «Soy» del grafo, `client`\|`expert`\|`speaker`\|`partner` o NULL; `role` es el cargo del perfil), `user_scopes` (permisos MCP) y `consents` (cadena SHA-256, solo inserción) |
 | **Sesiones** | `refresh_tokens` (SHA-256 del token y familia de rotación), `oauth_states` (state de LinkedIn, un solo uso) y `auth_handoffs` (código de canje) |
 | **Catálogo** | `industries`, `events` (`owner_id` y `status` `draft`\|`published` para los creados en el panel), `event_days`, `speakers` y `sessions` (`code` = `evento:día:slot`, como en el frontend; `speaker` = ponente) |
 | **Progreso** | `registrations`, `checkins` (con `totem_id` si fue por NFC), `missions` (`kind: "event"` + `event_id` para las de un evento), `mission_progress` y `xp_ledger` (cada XP queda registrado y no se puede sumar dos veces; `users.xp` guarda el total) |
@@ -446,7 +447,7 @@ erDiagram
 - **Consentimientos:** el frontend envía cada evento a `POST /api/me/consents` (`details` lleva el registro local con su `idLocal` y `hashLocal`). Si la API no responde, queda pendiente en el navegador y se reenvía en orden. La cadena del servidor es propia, independiente de la del navegador.
 - **Supresión y retención:** `DELETE /api/me` borra el usuario y el resto cae por `ON DELETE CASCADE`. `consents.user_id` pasa a `NULL` (el trigger de solo inserción permite únicamente ese cambio) y `consents.subject_id` conserva el UUID, que es el que entra en el hash, así que la cadena sigue siendo verificable. El registro queda **desvinculado, no anonimizado**: es la prueba de la autorización (Ley 1581, art. 17) durante el periodo de retención.
 - **Niveles:** `floor(xp / 500) + 1`, con 5 como máximo (`src/lib/levels.js`), igual que el frontend.
-- **Cambios de esquema:** agrega `db/migrations/006_<descripcion>.sql` (o el siguiente número). Nunca edites una migración ya aplicada, y escríbelas **aditivas**: en producción la API nueva y la migración se despliegan a la vez.
+- **Cambios de esquema:** agrega `db/migrations/009_<descripcion>.sql` (o el siguiente número). Nunca edites una migración ya aplicada, y escríbelas **aditivas**: en producción la API nueva y la migración se despliegan a la vez.
 
 ---
 

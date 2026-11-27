@@ -4,6 +4,9 @@ import { levelInfo } from "./levels.js";
 export const initialsOf = (n) =>
   (String(n || "").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("") || "TÚ").toUpperCase();
 
+/** Roles «Soy» del grafo de red (CHECK de users.graph_role, migración 008) */
+export const GRAPH_ROLES = ["client", "expert", "speaker", "partner"];
+
 export const toUser = (u, scopes) => ({
   id: u.id,
   email: u.email,
@@ -24,6 +27,7 @@ export const toUser = (u, scopes) => ({
   legalVersion: u.legal_version ?? null,
   isDemo: u.is_demo,
   accountRole: u.account_role ?? "attendee", // attendee | organizer | admin (rol de la cuenta, no el cargo)
+  graphRole: u.graph_role ?? null, // client | expert | speaker | partner | null (rol «Soy» del grafo)
   xp: u.xp,
   ...levelInfo(u.xp),
   scopes,
@@ -151,6 +155,7 @@ export const toAttendee = (r, viewerId) => ({
   initials: initialsOf(r.name),
   headline: [r.role, r.company].filter(Boolean).join(" · "),
   industry: r.industry,
+  graphRole: r.graph_role ?? null,
   interests: r.interests ?? [],
   connection: r.conn_id ? { id: r.conn_id, status: r.conn_status, direction: directionOf(r.requested_by, viewerId) } : null,
 });
@@ -163,6 +168,7 @@ export const toPeer = (u) => u && ({
   initials: initialsOf(u.name),
   headline: [u.role, u.company].filter(Boolean).join(" · "),
   industry: u.industry,
+  graphRole: u.graph_role ?? null,
   affinity: null,
   matchReason: "",
   interests: Array.isArray(u.interests) ? u.interests : [], // CONN_SELECT ya aplica el permiso «interests»
