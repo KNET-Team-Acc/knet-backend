@@ -5,12 +5,13 @@ import { pool } from "../../db.js";
 import { HttpError } from "../../lib/http.js";
 import { signQrToken } from "../../lib/qr.js";
 import { getScopes } from "../../lib/queries.js";
+import { denyAdmin } from "../../middleware/roles.js";
 
 const router = Router();
 
 // GET /api/me/qr-token?eventId=and → token firmado y de corta vida para mostrar en el QR (o emitir por NFC).
 // El frontend pide uno nuevo cada `refreshIn` segundos; cada token sirve una sola vez.
-router.get("/", async (req, res) => {
+router.get("/", denyAdmin(), async (req, res) => {
   const eventId = z.string().max(40).optional().parse(req.query.eventId);
   const scopes = await getScopes(pool, req.user.id);
   if (!scopes.network) throw new HttpError(403, "Revocaste el permiso «network»: actívalo para compartir tu QR");

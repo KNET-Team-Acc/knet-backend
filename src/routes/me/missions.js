@@ -7,8 +7,10 @@ import { awardXp } from "../../lib/xp.js";
 
 const router = Router();
 
-// Misiones visibles: las de la industria del usuario + comunes + grupales
-const APPLIES = "(m.kind <> 'industry' OR m.industry = $2)";
+// Misiones visibles: las de la industria del usuario + comunes + grupales + las de los eventos en los que está inscrito
+const APPLIES = `(CASE m.kind WHEN 'industry' THEN m.industry = $2
+                              WHEN 'event' THEN EXISTS (SELECT 1 FROM registrations r WHERE r.user_id = $3 AND r.event_id = m.event_id)
+                              ELSE true END)`;
 
 // GET /api/me/missions
 router.get("/", async (req, res) => {
@@ -16,8 +18,8 @@ router.get("/", async (req, res) => {
     `SELECT m.*, p.completed_at FROM missions m
        LEFT JOIN mission_progress p ON p.mission_code = m.code AND p.user_id = $1
       WHERE ${APPLIES}
-      ORDER BY CASE m.kind WHEN 'industry' THEN 0 WHEN 'common' THEN 1 ELSE 2 END, m.sort_order`,
-    [req.user.id, req.user.industry]);
+      ORDER BY CASE m.kind WHEN 'industry' THEN 0 WHEN 'common' THEN 1 WHEN 'group' THEN 2 ELSE 3 END, m.event_id, m.sort_order`,
+    [req.user.id, req.user.industry, req.user.id]);
   const missions = rows.map(toMission);
   res.json({ missions, completed: missions.filter((m) => m.completed).length, xp: req.user.xp, ...levelInfo(req.user.xp) });
 });
@@ -26,8 +28,8 @@ router.get("/", async (req, res) => {
 router.post("/:code/complete", async (req, res) => {
   const result = await tx(async (c) => {
     const { rows: [m] } = await c.query(
-      `SELECT * FROM missions m WHERE m.code = $1 AND ${APPLIES}`, [req.params.code, req.user.industry]);
-    if (!m) throw new HttpError(404, `No existe la misión ${req.params.code} para tu industria`);
+      `SELECT * FROM missions m WHERE m.code = $1 AND ${APPLIES}`, [req.params.code, req.user.industry, req.user.id]);
+    if (!m) throw new HttpError(404, `No existe la misión ${req.params.code} para tu industria o tus eventos`);
     const { rows: [p] } = await c.query(
       `INSERT INTO mission_progress (user_id, mission_code) VALUES ($1, $2)
        ON CONFLICT DO NOTHING RETURNING completed_at`, [req.user.id, m.code]);

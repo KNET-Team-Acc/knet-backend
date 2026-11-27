@@ -8,6 +8,7 @@ import { levelInfo, XP_REWARDS } from "../../lib/levels.js";
 import { publish } from "../../lib/events-bus.js";
 import { consumeNonce, verifyQrToken } from "../../lib/qr.js";
 import { getScopes } from "../../lib/queries.js";
+import { denyAdmin } from "../../middleware/roles.js";
 import { toConnection } from "../../lib/serialize.js";
 import { awardXp } from "../../lib/xp.js";
 
@@ -95,7 +96,7 @@ const UPSERT_PEER = `
 // POST /api/me/connections/scan { token, context? } → escanea el QR dinámico de otro asistente.
 // Crea la conexión en ambos sentidos (aceptada) y suma +100 XP a cada uno una sola vez (ref conn:<uuid>).
 // 400 invalid_qr / qr_expired / own_qr, 409 qr_used (cada token sirve una vez), 429 si se abusa.
-router.post("/scan", scanLimiter, async (req, res) => {
+router.post("/scan", denyAdmin(), scanLimiter, async (req, res) => {
   const body = z.object({
     token: z.string().min(1).max(1000),
     context: z.string().trim().max(280).optional(),
