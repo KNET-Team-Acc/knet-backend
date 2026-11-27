@@ -165,7 +165,7 @@ export const toPeer = (u) => u && ({
   industry: u.industry,
   affinity: null,
   matchReason: "",
-  interests: [],
+  interests: Array.isArray(u.interests) ? u.interests : [], // CONN_SELECT ya aplica el permiso «interests»
   likes: [],
   goal: "",
 });

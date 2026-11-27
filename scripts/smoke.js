@@ -174,6 +174,7 @@ const realUser = async (name) => (await sql(
   `INSERT INTO users (email, name, industry, role, company, legal_version) VALUES ($1, $2, 'tech', 'CTO', 'Acme', $3) RETURNING id`,
   [`smoke.${name.toLowerCase()}.${Date.now()}@knet.local`, `Smoke ${name}`, LEGAL_V])).rows[0].id;
 const ana = await realUser("Ana"), beto = await realUser("Beto"), caro = await realUser("Caro");
+await sql("UPDATE users SET interests = $2 WHERE id = $1", [beto, ["IA generativa", "Datos"]]);
 // QR dinámico: Beto muestra su código y Ana lo escanea
 userId = beto;
 const qrB = await check("token QR de Beto", "GET", "/api/me/qr-token?eventId=and");
@@ -191,6 +192,10 @@ const sc = await check("Ana escanea a Beto (solicitud)", "POST", "/api/me/connec
 if (sc?.xpAwarded !== 0 || !sc?.created || sc?.connection?.status !== "pending" || sc?.connection?.direction !== "outgoing"
     || sc?.connection?.contact?.userId !== beto || sc?.connection?.eventId !== "and") {
   failed++; console.log("    ✗ el escaneo debería crear una solicitud pendiente hacia Beto, sin XP");
+}
+// La tarjeta de Beto trae sus intereses (concedió «interests» por defecto)
+if (JSON.stringify(sc?.connection?.contact?.interests) !== JSON.stringify(["IA generativa", "Datos"])) {
+  failed++; console.log(`    ✗ el escaneo debería traer los intereses de Beto: ${JSON.stringify(sc?.connection?.contact?.interests)}`);
 }
 const used = await check("token ya usado", "POST", "/api/me/connections/scan", { token: qrB.token }, [409]);
 if (used?.error !== "qr_used") { failed++; console.log("    ✗ debería ser qr_used"); }
@@ -210,6 +215,12 @@ const betoReq = (await check("solicitudes de Beto", "GET", "/api/me/connections?
 if (betoReq?.direction !== "incoming" || betoReq?.source !== "qr") { failed++; console.log("    ✗ Beto debería ver la solicitud de Ana como entrante (qr)"); }
 userId = ana;
 const anaReq = (await check("solicitudes de Ana", "GET", "/api/me/connections?status=pending")).connections.find((c) => c.contact.userId === beto);
+if (anaReq?.contact?.interests?.length !== 2) { failed++; console.log("    ✗ el sync de Ana debería traer los intereses de Beto"); }
+// Si Beto revoca «interests», su tarjeta deja de mostrarlos
+await sql("INSERT INTO user_scopes (user_id, scope, granted) VALUES ($1, 'interests', false) ON CONFLICT (user_id, scope) DO UPDATE SET granted = false", [beto]);
+const anaHidden = (await check("intereses de Beto ocultos", "GET", "/api/me/connections?status=pending")).connections.find((c) => c.contact.userId === beto);
+if (anaHidden?.contact?.interests?.length !== 0) { failed++; console.log("    ✗ sin el permiso «interests» no deberían verse los intereses de Beto"); }
+await sql("UPDATE user_scopes SET granted = true WHERE user_id = $1 AND scope = 'interests'", [beto]);
 const selfAcc = await check("Ana no acepta su propia solicitud", "PATCH", `/api/me/connections/${anaReq?.id}`, { status: "accepted" }, [403]);
 if (selfAcc?.error !== "not_recipient") { failed++; console.log("    ✗ debería ser not_recipient"); }
 userId = beto;
